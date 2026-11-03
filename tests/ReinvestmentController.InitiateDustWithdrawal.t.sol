@@ -21,6 +21,7 @@ contract ReinvestmentControllerInitiateDustWithdrawalTest is ReinvestmentControl
 
     _invest(INVESTED);
     _donate(DUST);
+    _divest(INVESTED);
     _pause();
   }
 
@@ -31,16 +32,17 @@ contract ReinvestmentControllerInitiateDustWithdrawalTest is ReinvestmentControl
     vm.prank(admin);
     controller.initiateDustWithdrawal();
 
-    assertEq(wallet.availableBalance(address(usdc), address(controller)), INVESTED);
+    assertEq(controller.getPendingDust(), DUST);
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), 0);
     assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), DUST);
     assertEq(
       wallet.withdrawalBlock(address(usdc), address(controller)),
       block.number + WITHDRAWAL_DELAY
     );
-    assertEq(hub.getAssetSwept(assetId), INVESTED);
-    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED - INVESTED);
+    assertEq(hub.getAssetSwept(assetId), 0);
+    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED);
     assertEq(usdc.balanceOf(address(controller)), 0);
-    assertEq(usdc.balanceOf(address(wallet)), INVESTED + DUST);
+    assertEq(usdc.balanceOf(address(wallet)), DUST);
   }
 
   function test_initiateDustWithdrawal(uint256 dust) public {
@@ -55,44 +57,8 @@ contract ReinvestmentControllerInitiateDustWithdrawalTest is ReinvestmentControl
     controller.initiateDustWithdrawal();
 
     assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), DUST + dust);
-    assertEq(wallet.availableBalance(address(usdc), address(controller)), INVESTED);
-    assertEq(hub.getAssetSwept(assetId), INVESTED);
-  }
-
-  function test_initiateDustWithdrawal_afterFullDivest() public {
-    vm.prank(admin);
-    controller.unpause();
-
-    vm.prank(keeper);
-    controller.divest(INVESTED, _encodeAttestation(_defaultTransferSpec(INVESTED)), hex'1234');
-
-    vm.prank(pauser);
-    controller.pause();
-
-    assertEq(hub.getAssetSwept(assetId), 0);
-
-    vm.expectEmit(address(controller));
-    emit IReinvestmentController.DustWithdrawalInitiated(DUST);
-
-    vm.prank(admin);
-    controller.initiateDustWithdrawal();
-
-    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), DUST);
     assertEq(wallet.availableBalance(address(usdc), address(controller)), 0);
-  }
-
-  function test_initiateDustWithdrawal_neverTouchesPrincipal() public {
-    vm.prank(admin);
-    controller.initiateDustWithdrawal();
-
-    vm.roll(block.number + WITHDRAWAL_DELAY);
-
-    vm.prank(admin);
-    controller.claimDust(alice);
-
-    assertEq(wallet.availableBalance(address(usdc), address(controller)), INVESTED);
-    assertEq(hub.getAssetSwept(assetId), INVESTED);
-    assertEq(usdc.balanceOf(alice), DUST);
+    assertEq(hub.getAssetSwept(assetId), 0);
   }
 
   function test_initiateDustWithdrawal_blocksUnpause() public {
@@ -157,10 +123,34 @@ contract ReinvestmentControllerInitiateDustWithdrawalTest is ReinvestmentControl
   function test_initiateDustWithdrawal_revertsWith_WithdrawalInProcess_principalWithdrawal()
     public
   {
+    _reinvest(INVESTED);
+    _pause();
+
     vm.prank(admin);
     controller.initiateWithdrawal();
 
     vm.expectRevert(IReinvestmentController.WithdrawalInProcess.selector);
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+  }
+
+  function test_initiateDustWithdrawal_revertsWith_SweptNotZero() public {
+    _reinvest(INVESTED);
+    _pause();
+
+    vm.expectRevert(IReinvestmentController.SweptNotZero.selector);
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+  }
+
+  function test_initiateDustWithdrawal_revertsWith_SweptNotZero(uint256 remaining) public {
+    remaining = bound(remaining, 1, INVESTED - 1);
+
+    _reinvest(INVESTED);
+    _divest(INVESTED - remaining);
+    _pause();
+
+    vm.expectRevert(IReinvestmentController.SweptNotZero.selector);
     vm.prank(admin);
     controller.initiateDustWithdrawal();
   }
@@ -177,5 +167,12 @@ contract ReinvestmentControllerInitiateDustWithdrawalTest is ReinvestmentControl
     vm.expectRevert(IReinvestmentController.NoDust.selector);
     vm.prank(admin);
     controller.initiateDustWithdrawal();
+  }
+
+  /// @dev Unpauses and invests again, leaving the controller unpaused
+  function _reinvest(uint256 amount) internal {
+    _unpause();
+    vm.warp(block.timestamp + INVEST_MIN_DELAY);
+    _invest(amount);
   }
 }

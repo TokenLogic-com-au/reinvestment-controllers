@@ -27,6 +27,7 @@ contract ReinvestmentControllerStorageTest is ReinvestmentControllerTestBase {
   function test_everyFieldLivesAtItsNamespacedSlot() public {
     vm.prank(keeper);
     controller.invest(1_000e6);
+    _divest(1_000e6);
 
     _setMaxFee(1e6);
     _donate(1e6);

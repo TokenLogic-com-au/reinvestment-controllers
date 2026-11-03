@@ -3,6 +3,7 @@ pragma solidity 0.8.29;
 
 import {IERC20} from '@openzeppelin/contracts/interfaces/IERC20.sol';
 import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
+import {Math} from '@openzeppelin/contracts/utils/math/Math.sol';
 
 /// @dev Stand-in for Circle's `GatewayWallet`. Mirrors the real two-bucket balance model:
 /// `availableBalance` moves into `withdrawingBalance` on `initiateWithdrawal`, and `withdraw`
@@ -92,13 +93,18 @@ contract MockGatewayWallet {
   }
   /// @dev Transfers to the minter rather than burning. The real system burns here and mints on
   /// the destination domain, but the controller only permits same-domain transfers, so moving
-  /// the tokens is equivalent and keeps total supply conserved for the invariant suite.
+  /// the tokens is equivalent and keeps total supply conserved for the invariant suite. Like the
+  /// real `_reduceBalance`, it debits the available balance first and takes any remainder from the
+  /// withdrawing balance.
   function gatewayBurn(address token, address depositor, uint256 value, uint256 fee) external {
     require(msg.sender == gatewayMinter, NotGatewayMinter());
 
-    _availableBalances[token][depositor] -= value + fee;
+    uint256 total = value + fee;
+    uint256 fromAvailable = Math.min(total, _availableBalances[token][depositor]);
+    _availableBalances[token][depositor] -= fromAvailable;
+    _withdrawingBalances[token][depositor] -= total - fromAvailable;
 
-    IERC20(token).safeTransfer(msg.sender, value + fee);
+    IERC20(token).safeTransfer(msg.sender, total);
   }
 
   function domainSeparator() external view returns (bytes32) {

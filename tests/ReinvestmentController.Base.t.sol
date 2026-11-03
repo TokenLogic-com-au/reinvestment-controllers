@@ -110,6 +110,13 @@ abstract contract ReinvestmentControllerTestBase is Test, GatewayPayloads {
     controller.invest(amount);
   }
 
+  /// @dev Divests with the mock minter, which burns and mints in the same call. Assumes no fee
+  /// is configured, so the keeper needs no USDC
+  function _divest(uint256 amount) internal {
+    vm.prank(keeper);
+    controller.divest(amount, _encodeAttestation(_defaultTransferSpec(amount)), hex'1234');
+  }
+
   function _donate(uint256 amount) internal {
     usdc.mint(alice, amount);
 

@@ -11,10 +11,9 @@ import {ReinvestmentControllerTestBase} from './ReinvestmentController.Base.t.so
 contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
   uint256 internal constant INVESTED = 400_000e6;
   uint256 internal constant DUST = 1_000e6;
-  uint256 internal constant BURNED = 100_000e6;
-  uint256 internal constant DIVESTED = 100_000e6;
   uint256 internal constant CONFIGURED_FEE = 1e6;
   uint256 internal constant CHARGED_FEE = 0.8e6;
+  uint256 internal constant DIVESTED = INVESTED - CONFIGURED_FEE;
 
   function setUp() public override {
     super.setUp();
@@ -25,6 +24,7 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
 
     _invest(INVESTED);
     _donate(DUST);
+    _divest(INVESTED);
     _pause();
 
     vm.prank(admin);
@@ -43,11 +43,11 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     assertEq(controller.getPendingDust(), 0);
     assertEq(usdc.balanceOf(alice), DUST);
     assertEq(usdc.balanceOf(address(controller)), 0);
-    assertEq(usdc.balanceOf(address(wallet)), INVESTED);
+    assertEq(usdc.balanceOf(address(wallet)), 0);
     assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
-    assertEq(wallet.availableBalance(address(usdc), address(controller)), INVESTED);
-    assertEq(hub.getAssetSwept(assetId), INVESTED);
-    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED - INVESTED);
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), 0);
+    assertEq(hub.getAssetSwept(assetId), 0);
+    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED);
   }
 
   function test_claimDust_doesNotReclaimToHub() public {
@@ -72,48 +72,96 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     assertFalse(controller.paused());
   }
 
-  /// @dev Circle burns an attested intent after the mint, so a burn can land while the dust
-  /// withdrawal is queued. Paying out would leave the Hub's swept balance unbacked
-  function test_claimDust_revertsWith_SweptNotBacked() public {
-    vm.prank(address(minter));
-    wallet.gatewayBurn(address(usdc), address(controller), BURNED, 0);
+  /// @dev A burn pending when the dust withdrawal is queued takes its funds from the withdrawing
+  /// balance, so only the difference between the configured and the charged fee is paid out
+  function test_claimDust_pendingBurnLeavesOnlyFeeDifference() public {
+    _divestAllWithDeferredBurn();
 
-    assertLt(
-      wallet.availableBalance(address(usdc), address(controller)),
-      hub.getAssetSwept(assetId)
-    );
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
 
-    vm.expectRevert(IReinvestmentController.SweptNotBacked.selector);
+    assertEq(controller.getPendingDust(), INVESTED);
+
+    _burnDivested(CHARGED_FEE);
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    uint256 aliceBefore = usdc.balanceOf(alice);
+
     vm.prank(admin);
     controller.claimDust(alice);
+
+    vm.prank(admin);
+    controller.unpause();
+
+    assertEq(usdc.balanceOf(alice) - aliceBefore, CONFIGURED_FEE - CHARGED_FEE);
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), 0);
+    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
+    assertEq(hub.getAssetSwept(assetId), 0);
+    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED);
   }
 
-  /// @dev The queued amount is not stranded when {claimDust} refuses it: {withdraw} returns it to
-  /// the Hub instead
-  function test_claimDust_blockedDustIsRecoverableThroughWithdraw() public {
-    vm.prank(address(minter));
-    wallet.gatewayBurn(address(usdc), address(controller), BURNED, 0);
+  /// @dev A donation made after the dust withdrawal is queued lands in the available balance,
+  /// which the pending burn drains first, so it ends up in the withdrawing balance and is paid out
+  function test_claimDust_donationDuringPendingBurnIsPaidOut() public {
+    _divestAllWithDeferredBurn();
 
-    uint256 liquidityBefore = hub.getAssetLiquidity(assetId);
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
 
-    vm.expectRevert(IReinvestmentController.SweptNotBacked.selector);
+    _donate(DUST);
+    _burnDivested(CONFIGURED_FEE);
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    uint256 aliceBefore = usdc.balanceOf(alice);
+
     vm.prank(admin);
     controller.claimDust(alice);
 
     vm.prank(admin);
-    controller.withdraw();
+    controller.unpause();
 
-    assertEq(controller.getPendingDust(), 0);
+    assertEq(usdc.balanceOf(alice) - aliceBefore, DUST);
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), 0);
     assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
-    assertEq(hub.getAssetLiquidity(assetId), liquidityBefore + DUST);
-    assertEq(hub.getAssetSwept(assetId), INVESTED - DUST);
+    assertEq(hub.getAssetSwept(assetId), 0);
+  }
+
+  /// @dev A burn can drain a queued dust withdrawal completely when it holds no real dust. The
+  /// stale `pendingDust` then lets {claimDust} reach a later principal withdrawal, and the backing
+  /// check is what stops it from paying that out
+  function test_claimDust_revertsWith_SweptNotBacked_stalePendingDust() public {
+    _divestAllWithDeferredBurn();
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _burnDivested(CONFIGURED_FEE);
+
+    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
+    assertEq(controller.getPendingDust(), INVESTED);
+
+    _reinvest(INVESTED);
+    _pause();
+
+    vm.prank(admin);
+    controller.initiateWithdrawal();
+
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    vm.expectRevert(IReinvestmentController.SweptNotBacked.selector);
+    vm.prank(admin);
+    controller.claimDust(alice);
   }
 
   function test_claimDust_revertsWith_NoDustWithdrawalInProcess_principalWithdrawal() public {
-    vm.startPrank(admin);
+    vm.prank(admin);
     controller.claimDust(alice);
+
+    _reinvest(INVESTED);
+    _pause();
+
+    vm.prank(admin);
     controller.initiateWithdrawal();
-    vm.stopPrank();
 
     vm.roll(block.number + WITHDRAWAL_DELAY);
 
@@ -186,53 +234,20 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     controller.claimDust(alice);
   }
 
-  /// @dev {divest} lowers swept at mint while the Gateway balance only drops when Circle burns, so
-  /// a dust withdrawal queued in between overstates the dust. The burn landing first blocks the
-  /// claim, {withdraw} returns the excess to the Hub, and only `maxFee - fee` is ever paid out
-  function test_claimDust_overstatedDustBeforeBurnIsReturnedToHub() public {
-    _divestWithDeferredBurn();
-
-    vm.prank(admin);
-    controller.initiateDustWithdrawal();
-
-    assertEq(controller.getPendingDust(), DIVESTED + CONFIGURED_FEE);
-
-    _burnDivested();
-    vm.roll(block.number + WITHDRAWAL_DELAY);
-
-    vm.expectRevert(IReinvestmentController.SweptNotBacked.selector);
-    vm.prank(admin);
-    controller.claimDust(alice);
-
-    vm.prank(admin);
-    controller.withdraw();
-
-    assertEq(
-      wallet.availableBalance(address(usdc), address(controller)),
-      hub.getAssetSwept(assetId) + CONFIGURED_FEE - CHARGED_FEE
-    );
-
-    uint256 aliceBefore = usdc.balanceOf(alice);
-
-    vm.prank(admin);
-    controller.initiateDustWithdrawal();
-    vm.roll(block.number + WITHDRAWAL_DELAY);
-    vm.prank(admin);
-    controller.claimDust(alice);
-
-    assertEq(usdc.balanceOf(alice) - aliceBefore, CONFIGURED_FEE - CHARGED_FEE);
-    assertEq(
-      wallet.availableBalance(address(usdc), address(controller)),
-      hub.getAssetSwept(assetId)
-    );
+  /// @dev Unpauses and invests again, leaving the controller unpaused
+  function _reinvest(uint256 amount) internal {
+    _unpause();
+    vm.warp(block.timestamp + INVEST_MIN_DELAY);
+    _invest(amount);
   }
 
-  /// @dev Clears the dust queued in setUp, then divests with the burn deferred: the mint lands and
-  /// {divest} lowers swept, but the Gateway balance is untouched until {_burnDivested}
-  function _divestWithDeferredBurn() internal {
+  /// @dev Clears the dust queued in setUp, invests again and divests everything with the burn
+  /// deferred: the mint lands and {divest} lowers swept to zero, but the Gateway balance is
+  /// untouched until {_burnDivested}. Leaves the controller paused
+  function _divestAllWithDeferredBurn() internal {
     vm.prank(admin);
     controller.claimDust(alice);
-    _unpause();
+    _reinvest(INVESTED);
     _setMaxFee(CONFIGURED_FEE);
 
     vm.mockCall(address(minter), abi.encodeWithSelector(minter.gatewayMint.selector), '');
@@ -246,10 +261,13 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
 
     vm.clearMockedCalls();
     _pause();
+
+    assertEq(hub.getAssetSwept(assetId), 0);
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), INVESTED);
   }
 
-  function _burnDivested() internal {
+  function _burnDivested(uint256 fee) internal {
     vm.prank(address(minter));
-    wallet.gatewayBurn(address(usdc), address(controller), DIVESTED, CHARGED_FEE);
+    wallet.gatewayBurn(address(usdc), address(controller), DIVESTED, fee);
   }
 }

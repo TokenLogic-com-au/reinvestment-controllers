@@ -14,6 +14,10 @@ import {
   ReinvestmentControllerForkBase
 } from './ReinvestmentController.ForkBase.t.sol';
 
+interface IDeposits {
+  function depositFor(address token, address depositor, uint256 value) external;
+}
+
 /// @dev Each test authorizes through the TEE model, changes state, then settles the mint and the
 /// burn without the controller's ERC-1271 check running again.
 contract ReinvestmentControllerForkTeeTest is ReinvestmentControllerForkBase {
@@ -282,46 +286,94 @@ contract ReinvestmentControllerForkTeeTest is ReinvestmentControllerForkBase {
   }
 
   /// @dev {divest} lowers `swept` on the mint while the Gateway balance only drops once Circle
-  /// burns, so a dust withdrawal queued in between sizes itself from money already owed. The claim
-  /// is blocked and {withdraw} returns it to the Hub
-  function test_initiateDustWithdrawal_pendingBurnIsBlockedAndRecovered() public {
-    bytes32 adminRole = controller.DEFAULT_ADMIN_ROLE();
-    vm.prank(admin);
-    controller.grantRole(adminRole, alice);
-
+  /// burns. With `swept` above zero, a burn pending against a queued dust withdrawal would drain
+  /// the balance backing `swept` first and leave neither {claimDust} nor {withdraw} able to complete
+  function test_initiateDustWithdrawal_revertsWith_SweptNotZero_pendingBurn() public {
     uint256 invested = _investAll();
-    uint256 amount = invested / 4;
-    Authorization memory auth = _authorize(amount, 'a');
+    Authorization memory auth = _authorize((invested * 3) / 4, 'a');
 
     _mint(auth, keeper);
 
-    vm.prank(admin);
+    assertGt(_swept(), 0);
+
+    vm.startPrank(admin);
     controller.pause();
 
-    vm.prank(admin);
+    vm.expectRevert(IReinvestmentController.SweptNotZero.selector);
     controller.initiateDustWithdrawal();
+    vm.stopPrank();
+  }
 
-    assertEq(controller.getPendingDust(), amount + MAX_FEE);
-    assertEq(_withdrawing(), amount + MAX_FEE);
-    assertEq(_available(), _swept());
+  /// @dev Once everything is divested, a burn still pending when the dust withdrawal is queued
+  /// takes its funds from the withdrawing balance, leaving exactly the fee Circle did not charge
+  function test_initiateDustWithdrawal_pendingBurnBelowMaxFee() public {
+    uint256 invested = _investAll();
+    uint256 actualFee = 4e5;
+    Authorization memory auth = _authorize(invested - MAX_FEE, 'a');
+
+    _mint(auth, keeper);
+
+    assertEq(_swept(), 0);
+
+    vm.startPrank(admin);
+    controller.pause();
+    controller.initiateDustWithdrawal();
+    vm.stopPrank();
+
+    assertEq(_withdrawing(), invested);
+
+    _teeBurn(auth, actualFee);
+
+    assertEq(_withdrawing(), MAX_FEE - actualFee);
+
+    _claimDustAndUnpause();
+
+    assertEq(IERC20(USDC).balanceOf(admin), MAX_FEE - actualFee);
+  }
+
+  /// @dev A donation made after the dust withdrawal is queued lands in the available balance. The
+  /// pending burn drains it first, so it ends up in the withdrawing balance and is paid out
+  function test_initiateDustWithdrawal_pendingBurnWithDonatedDust() public {
+    uint256 invested = _investAll();
+    Authorization memory auth = _authorize(invested - MAX_FEE, 'a');
+
+    _mint(auth, keeper);
+
+    vm.startPrank(admin);
+    controller.pause();
+    controller.initiateDustWithdrawal();
+    vm.stopPrank();
+
+    deal(USDC, alice, 1);
+    vm.startPrank(alice);
+    IERC20(USDC).approve(GATEWAY_WALLET, 1);
+    IDeposits(GATEWAY_WALLET).depositFor(USDC, address(controller), 1);
+    vm.stopPrank();
 
     _teeBurn(auth, MAX_FEE);
 
-    assertLt(_available(), _swept());
+    assertEq(_withdrawing(), 1);
 
+    _claimDustAndUnpause();
+
+    assertEq(IERC20(USDC).balanceOf(admin), 1);
+  }
+
+  /// @dev Claims the queued dust to the admin after the Gateway's delay and unpauses, asserting
+  /// nothing is left at the Gateway and the Hub's claim is still zero
+  function _claimDustAndUnpause() internal {
     vm.roll(block.number + IGatewayWallet(GATEWAY_WALLET).withdrawalDelay());
 
-    vm.expectRevert(IReinvestmentController.SweptNotBacked.selector);
-    vm.prank(admin);
-    controller.claimDust(alice);
+    vm.startPrank(admin);
+    controller.claimDust(admin);
+    controller.unpause();
+    vm.stopPrank();
 
-    vm.prank(admin);
-    controller.withdraw();
-
+    assertFalse(controller.paused());
     assertEq(controller.getPendingDust(), 0);
+    assertEq(_swept(), 0);
+    assertEq(_available(), 0);
     assertEq(_withdrawing(), 0);
-    assertEq(_swept(), _available());
-    assertEq(IERC20(USDC).balanceOf(alice), 0);
   }
 
   function test_divest_revertsWith_TransferSpecHashUsed_duplicateSubmission() public {
