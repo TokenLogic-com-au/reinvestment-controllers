@@ -229,8 +229,9 @@ contract ReinvestmentController is
   /// @inheritdoc IReinvestmentController
   function initiateDustWithdrawal() external onlyRole(DEFAULT_ADMIN_ROLE) whenPaused {
     _requireNoPendingWithdrawal();
+    require(HUB.getAssetSwept(ASSET_ID) == 0, SweptNotZero());
 
-    uint256 dust = Math.saturatingSub(_availableBalance(), HUB.getAssetSwept(ASSET_ID));
+    uint256 dust = _availableBalance();
 
     require(dust > 0, NoDust());
 

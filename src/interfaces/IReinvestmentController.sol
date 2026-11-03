@@ -88,6 +88,9 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// @dev Paying out would leave the Hub's swept balance unbacked at the Gateway
   error SweptNotBacked();
 
+  /// @dev Dust can only be withdrawn once the Hub's swept balance is zero
+  error SweptNotZero();
+
   /// @dev No pending on-chain withdrawal
   error NoWithdrawalInProcess();
 
@@ -225,18 +228,18 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// As the contract potentially overpays fees if they are lower than max fee, a certain amount accumulates on the
   /// Gateway that can only be claimed by this function, as the other paths use the HUB.reclaim() functionality and
   /// check the accounting against that balance.
-  /// @dev Sizes the withdrawal as `available - swept`, which measures surplus only once every burn
-  /// has settled. {divest} lowers `swept` when it mints, while the Gateway balance drops later when
-  /// Circle burns, so in between the difference is money already owed and this queues too much.
-  /// {claimDust} refuses to pay that out, and {withdraw} returns it to the Hub
+  /// @dev Requires `swept` to be zero and queues the whole available balance. {divest} lowers
+  /// `swept` when it mints, while the Gateway balance drops later when Circle burns, so a burn may
+  /// still be pending against the queued amount. The Gateway then takes it from the withdrawing
+  /// balance, and what is left is the dust. While `swept` is above zero the same burn would first
+  /// drain the balance backing it, leaving neither {claimDust} nor {withdraw} able to complete
   function initiateDustWithdrawal() external;
 
   /// @notice Completes a pending dust withdrawal and forwards it to `recipient`. The dust is
   /// not reclaimed to the Hub, as it was never counted as swept.
   /// @dev Requires a dust withdrawal to be pending, so it cannot pay out one queued by
   /// {initiateWithdrawal}, and requires the Gateway's available balance to still cover `swept`
-  /// afterwards, so a burn landing against the queued amount blocks the claim rather than
-  /// draining principal. Blocked funds stay in the Gateway and {withdraw} returns them to the Hub
+  /// afterwards, so a payout can never leave the Hub's claim unbacked
   /// @dev `recipient` must hold DEFAULT_ADMIN_ROLE, a sanity check against paying dust out to a
   /// mistyped address
   /// @param recipient The address to receive the dust
