@@ -198,7 +198,7 @@ sequenceDiagram
 
 ## 6. Dust recovery
 
-Dust is Gateway balance above `swept`. It accumulates when Circle charges less than `Fcfg` or when a third party calls `depositFor` on the controller. Neither divestment nor on-chain withdrawal can reach it, since both are bounded by `swept`. `initiateDustWithdrawal()` and `claimDust(recipient)` withdraw it and forward it to an admin-held recipient, rather than reclaiming it to the Hub.
+Dust is Gateway balance above `swept`. It accumulates when Circle charges less than `Fcfg` or when a third party calls `depositFor` on the controller. Neither divestment nor on-chain withdrawal can reach it, since both are bounded by `swept`. `initiateDustWithdrawal()` and `claimDust(recipient)` withdraw it and forward it to an admin-held recipient, rather than reclaiming it to the Hub. They only run once `swept` is zero, so dust is collected after a full divest; until then it stays in the Gateway, over-backing the Hub's claim.
 
 ```mermaid
 sequenceDiagram
@@ -212,7 +212,8 @@ sequenceDiagram
     P->>C: pause()
     A->>C: initiateDustWithdrawal()
     C->>C: Check admin role, paused and no pending withdrawal
-    C->>C: dust = available - swept, require dust > 0
+    C->>C: require swept == 0
+    C->>C: dust = available, require dust > 0
     C->>C: pendingDust = dust
     C->>W: initiateWithdrawal(USDC, dust)
     Note over W: Gateway withdrawal delay (blocks)
@@ -227,7 +228,7 @@ sequenceDiagram
     A->>C: unpause()
 ```
 
-`available - swept` measures dust only after every burn has settled. `divest()` lowers `swept` at mint, but the Gateway balance drops only when Circle later burns, so between the two the difference is owed to a pending burn. If that burn lands during the withdrawal delay, `claimDust()` reverts with `SweptNotBacked`. The queued amount then stays in the withdrawing balance, `withdraw()` returns it to the Hub, and any genuine dust can be recovered with a fresh `initiateDustWithdrawal()`.
+`divest()` lowers `swept` at mint, but the Gateway balance drops only when Circle later burns, so a burn may still be pending when the dust withdrawal is queued. The Gateway debits a burn from the available balance first and from the withdrawing balance after, so with `swept` at zero the pending burn takes its funds from the queued amount, and `claimDust()` pays out exactly what is left. With `swept` above zero the same burn would first drain the balance backing `swept`, which is why `initiateDustWithdrawal()` reverts with `SweptNotZero` until the Hub is fully divested.
 
 ## Fee accounting
 

@@ -65,11 +65,12 @@ the residue is stranded.
 
 `initiateDustWithdrawal` and `claimDust` reopen it through the on-chain exit, which
 needs no attestation and so is untouched by the `swept` bound in `isValidSignature`.
-The amount withdrawn is `available - swept`, never more, so principal is out of reach
-by construction: the pair only ever moves what sits above the Hub's claim, the same
-line `initiateWithdrawal` refuses to cross from the other side. Both require the
-controller to be paused, which freezes `swept` for the duration of the Gateway's
-withdrawal delay.
+It only runs once `swept` is zero, when the Hub has no claim left on the Gateway, so it
+queues the whole available balance and principal is out of reach by construction. Both
+functions require the controller to be paused, which keeps `swept` at zero for the
+duration of the Gateway's withdrawal delay. While `swept` is above zero, dust stays in
+the Gateway: it over-backs the Hub's claim, which is the safe direction, and can be
+collected after a full divest.
 
 The dust is forwarded to a recipient, not reclaimed to the Hub. `reclaim` is capped at
 `swept` and only trades the Hub's claim for cash — it moves `swept` into `liquidity`,
@@ -77,19 +78,21 @@ leaving `totalAddedAssets` unchanged — so it can never reach the surplus and w
 immediately recreate it. Residue that was never principal does not re-enter Hub
 accounting. This way treasury can reclaim the excess fees it paid if it is the recipient.
 
-`available - swept` only measures surplus once every burn has settled. `divest` lowers
-`swept` as soon as it mints, while the Gateway balance drops minutes later when Circle
-burns, so between those two points the difference is money already owed rather than
-dust. `initiateDustWithdrawal` cannot tell the two apart and would queue the pending
-burn's amount, so it should only be called once `available` has settled at `swept` plus
-whatever was donated.
+Requiring `swept` to be zero is what makes the timing of burns irrelevant. `divest`
+lowers `swept` as soon as it mints, while the Gateway balance drops minutes later when
+Circle burns, so a burn may still be pending when the dust withdrawal is queued. The
+Gateway debits a burn from the available balance first and takes the rest from the
+withdrawing balance, so the pending burn takes its funds from the queued amount and what
+is left is exactly the dust, including anything donated in the meantime. With `swept`
+above zero, the same burn would first drain the balance backing `swept`. `claimDust` could
+then no longer pay out without leaving the Hub's claim unbacked, and if the queue held
+any real dust, `withdraw` would try to reclaim more than `swept` and revert, leaving the
+controller paused with no way to finish the withdrawal.
 
-`claimDust` is what makes that safe: after the Gateway pays out, it requires
-`available >= swept`, so dust can only leave while the Hub's claim stays fully backed.
-If a burn lands against a queued amount, the claim reverts and the funds stay in the
-Gateway's withdrawing balance, where `withdraw` returns them to the Hub and squares the
-books. Any genuine dust is still reachable afterwards through a fresh
-`initiateDustWithdrawal`.
+`claimDust` still requires `available >= swept` after the Gateway pays out, so a payout
+can never leave the Hub's claim unbacked. Circle burns minutes after a mint, well within
+the Gateway's withdrawal delay. Were a burn ever to land after the claim, it would come up
+short at the Gateway rather than at the Hub, since `swept` is zero.
 
 ## Trust assumptions
 
