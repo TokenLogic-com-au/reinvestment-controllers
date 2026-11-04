@@ -3,11 +3,13 @@ pragma solidity 0.8.29;
 
 import {IERC20} from '@openzeppelin/contracts/interfaces/IERC20.sol';
 import {SafeERC20} from '@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol';
+import {Math} from '@openzeppelin/contracts/utils/math/Math.sol';
 
 /// @dev Stand-in for Circle's `GatewayWallet`. Mirrors the real two-bucket balance model:
-/// `availableBalance` moves into `withdrawingBalance` on `initiateWithdrawal`, and `withdraw`
-/// pays the latter out. Getter names and argument order match the real contract
-/// (`token`, `depositor`) so the mock cannot teach a wrong API.
+/// `availableBalance` moves into `withdrawingBalance` on `initiateWithdrawal`, `withdraw` pays
+/// the latter out, and `gatewayBurn` debits the former first and takes any rest from the latter.
+/// Getter names and argument order match the real contract (`token`, `depositor`) so the mock
+/// cannot teach a wrong API.
 contract MockGatewayWallet {
   using SafeERC20 for IERC20;
 
@@ -96,9 +98,12 @@ contract MockGatewayWallet {
   function gatewayBurn(address token, address depositor, uint256 value, uint256 fee) external {
     require(msg.sender == gatewayMinter, NotGatewayMinter());
 
-    _availableBalances[token][depositor] -= value + fee;
+    uint256 total = value + fee;
+    uint256 fromAvailable = Math.min(total, _availableBalances[token][depositor]);
+    _availableBalances[token][depositor] -= fromAvailable;
+    _withdrawingBalances[token][depositor] -= total - fromAvailable;
 
-    IERC20(token).safeTransfer(msg.sender, value + fee);
+    IERC20(token).safeTransfer(msg.sender, total);
   }
 
   function domainSeparator() external view returns (bytes32) {

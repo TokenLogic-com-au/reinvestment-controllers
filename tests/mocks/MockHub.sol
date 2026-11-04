@@ -11,6 +11,7 @@ contract MockHub {
 
   error AssetNotListed();
   error InsufficientLiquidity(uint256 liquidity);
+  error InvalidAmount();
   error NotReinvestmentController();
   error SweptExceeded(uint256 swept);
 
@@ -50,6 +51,7 @@ contract MockHub {
   function reclaim(uint256 assetId, uint256 amount) external {
     _checkAsset(assetId);
     require(msg.sender == reinvestmentController, NotReinvestmentController());
+    require(amount > 0, InvalidAmount());
     require(amount <= _swept, SweptExceeded(_swept));
 
     _swept -= amount;

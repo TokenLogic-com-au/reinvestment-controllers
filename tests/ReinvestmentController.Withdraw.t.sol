@@ -6,12 +6,17 @@ import {IAccessControl} from '@openzeppelin/contracts/access/IAccessControl.sol'
 import {IReinvestmentController} from '../src/interfaces/IReinvestmentController.sol';
 
 import {ReinvestmentControllerTestBase} from './ReinvestmentController.Base.t.sol';
+import {MockHub} from './mocks/MockHub.sol';
 
 contract ReinvestmentControllerWithdrawTest is ReinvestmentControllerTestBase {
   // From GatewayWallet
   error WithdrawalNotYetAvailable();
 
   uint256 internal constant INVESTED = 400_000e6;
+  uint256 internal constant DIVESTED_MOST = 300_000e6;
+  uint256 internal constant DUST = 1_000e6;
+  uint256 internal constant CONFIGURED_FEE = 1e6;
+  uint256 internal constant CHARGED_FEE = 0.8e6;
 
   function setUp() public override {
     super.setUp();
@@ -98,6 +103,62 @@ contract ReinvestmentControllerWithdrawTest is ReinvestmentControllerTestBase {
     controller.unpause();
 
     assertFalse(controller.paused());
+  }
+
+  /// @dev A pending burn larger than the available balance spills into a queued dust withdrawal,
+  /// leaving it above swept. Only swept is returned to the Hub, and the rest stays here
+  function test_withdraw_dustQueueAboveSweptIsCappedAtSwept() public {
+    _unpause();
+    _setMaxFee(CONFIGURED_FEE);
+    _divestWithDeferredBurn(DIVESTED_MOST);
+    _pause();
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _burn(DIVESTED_MOST, CHARGED_FEE);
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    uint256 swept = hub.getAssetSwept(assetId);
+
+    assertGt(wallet.withdrawingBalance(address(usdc), address(controller)), swept);
+
+    vm.expectEmit(address(controller));
+    emit IReinvestmentController.WithdrawalCompleted(swept);
+
+    vm.prank(admin);
+    controller.withdraw();
+
+    vm.prank(admin);
+    controller.unpause();
+
+    assertEq(controller.getPendingDust(), 0);
+    assertEq(hub.getAssetSwept(assetId), 0);
+    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED);
+    assertEq(usdc.balanceOf(address(controller)), CONFIGURED_FEE - CHARGED_FEE);
+    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), 0);
+  }
+
+  /// @dev With swept at zero there is nothing to reclaim, and the Hub rejects a zero reclaim.
+  /// {claimDust} is the exit for that queue
+  function test_withdraw_revertsWith_InvalidAmount_dustQueueAfterFullDivest() public {
+    _unpause();
+
+    vm.prank(keeper);
+    controller.divest(INVESTED, _encodeAttestation(_defaultTransferSpec(INVESTED)), hex'1234');
+
+    _donate(DUST);
+    _pause();
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    vm.expectRevert(MockHub.InvalidAmount.selector);
+    vm.prank(admin);
+    controller.withdraw();
   }
 
   function test_withdraw_revertsWith_WithdrawalNotYetAvailable() public {
