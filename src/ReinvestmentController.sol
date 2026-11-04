@@ -210,9 +210,9 @@ contract ReinvestmentController is
 
   /// @inheritdoc IReinvestmentController
   function withdraw() external onlyRole(DEFAULT_ADMIN_ROLE) {
-    uint256 amount = _withdrawingBalance();
+    uint256 withdrawingBalance = _withdrawingBalance();
 
-    require(amount > 0, NoWithdrawalInProcess());
+    require(withdrawingBalance > 0, NoWithdrawalInProcess());
 
     ReinvestmentControllerStorage storage $ = _getReinvestmentControllerStorage();
     if ($.pendingDust > 0) {
@@ -220,10 +220,12 @@ contract ReinvestmentController is
     }
 
     GATEWAY_WALLET.withdraw(address(USDC));
-    USDC.safeTransfer(address(HUB), amount);
-    HUB.reclaim(ASSET_ID, amount);
 
-    emit WithdrawalCompleted(amount);
+    uint256 reclaimAmount = Math.min(withdrawingBalance, HUB.getAssetSwept(ASSET_ID));
+    USDC.safeTransfer(address(HUB), reclaimAmount);
+    HUB.reclaim(ASSET_ID, reclaimAmount);
+
+    emit WithdrawalCompleted(reclaimAmount);
   }
 
   /// @inheritdoc IReinvestmentController
@@ -250,16 +252,26 @@ contract ReinvestmentController is
 
     require($.pendingDust > 0, NoDustWithdrawalInProcess());
 
-    uint256 amount = _withdrawingBalance();
+    uint256 withdrawingBalance = _withdrawingBalance();
     $.pendingDust = 0;
 
     GATEWAY_WALLET.withdraw(address(USDC));
 
-    require(_availableBalance() >= HUB.getAssetSwept(ASSET_ID), SweptNotBacked());
+    uint256 hubShortfall = Math.min(
+      Math.saturatingSub(HUB.getAssetSwept(ASSET_ID), _availableBalance()),
+      withdrawingBalance
+    );
+    if (hubShortfall > 0) {
+      USDC.safeTransfer(address(HUB), hubShortfall);
+      HUB.reclaim(ASSET_ID, hubShortfall);
 
-    USDC.safeTransfer(recipient, amount);
+      emit WithdrawalCompleted(hubShortfall);
+    }
 
-    emit ClaimedDust(recipient, amount);
+    uint256 dust = withdrawingBalance - hubShortfall;
+    USDC.safeTransfer(recipient, dust);
+
+    emit ClaimedDust(recipient, dust);
   }
 
   /// @inheritdoc IReinvestmentController
