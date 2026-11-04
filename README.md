@@ -80,16 +80,22 @@ accounting. This way treasury can reclaim the excess fees it paid if it is the r
 `available - swept` only measures surplus once every burn has settled. `divest` lowers
 `swept` as soon as it mints, while the Gateway balance drops minutes later when Circle
 burns, so between those two points the difference is money already owed rather than
-dust. `initiateDustWithdrawal` cannot tell the two apart and would queue the pending
-burn's amount, so it should only be called once `available` has settled at `swept` plus
-whatever was donated.
+dust. `initiateDustWithdrawal` cannot tell the two apart and queues the pending burn's
+amount along with the dust.
 
-`claimDust` is what makes that safe: after the Gateway pays out, it requires
-`available >= swept`, so dust can only leave while the Hub's claim stays fully backed.
-If a burn lands against a queued amount, the claim reverts and the funds stay in the
-Gateway's withdrawing balance, where `withdraw` returns them to the Hub and squares the
-books. Any genuine dust is still reachable afterwards through a fresh
-`initiateDustWithdrawal`.
+`claimDust` is what makes that safe: the Hub is paid first. When the burn lands during
+the withdrawal delay, it drains the available balance backing `swept`, and may spill
+into the queued amount if it is larger than what is available. Either way, after the
+Gateway pays out, `claimDust` reclaims `swept - available` to the Hub and forwards only
+the rest. What the recipient receives is therefore always the Gateway balance above
+the Hub's claim, however the burn and any donation fall. The reclaim is capped at the
+withdrawn amount, which only binds if the Gateway debited more than `divest` accounted
+for, such as a fee above the pre-paid `maxFee` after lowering it without draining.
+
+`withdraw` also finalizes a dust withdrawal, and caps its reclaim at `swept`, since the
+Hub can take back no more. A principal withdrawal never exceeds `swept`, so the cap only
+binds when a burn spills into a queued dust withdrawal, in which case the excess stays in
+the controller. `claimDust` is the path that pays it out.
 
 ## Trust assumptions
 
