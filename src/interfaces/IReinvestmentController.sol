@@ -213,11 +213,11 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// @dev Returns the withdrawn funds to the Hub, capped at `swept`, since {reclaim} can only take
   /// back what was swept. A withdrawal queued by {initiateWithdrawal} never exceeds `swept`, so the
   /// cap only binds when finalizing a dust withdrawal. Any excess is deposited back into the
-  /// Gateway, where it covers a burn still pending against it or is left as dust
-  /// @dev {reclaim} is restricted to the Hub's configured controller, so repointing the Hub at a
+  /// Gateway, where it covers a burn still pending against it or is left as dust.
+  /// {reclaim} is restricted to the Hub's configured controller, so repointing the Hub at a
   /// different controller while a withdrawal is pending makes this revert until it is pointed back.
-  /// If the replacement also reduced `swept` below the pending amount, the reclaim stays blocked
-  /// until `swept` covers it again. The funds remain claimable in the Gateway in both cases, and
+  /// If the replacement also took `swept` to zero, it stays blocked, as the Hub rejects a zero
+  /// reclaim. The funds remain claimable in the Gateway in both cases, and
   /// the implementation sits behind a proxy, so a state this code cannot resolve can be addressed
   /// by upgrading it
   function withdraw() external;
@@ -233,17 +233,17 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// the Hub instead of paying it out
   function initiateDustWithdrawal() external;
 
-  /// @notice Completes a pending dust withdrawal and forwards it to `recipient`. The dust is
-  /// not reclaimed to the Hub, as it was never counted as swept.
+  /// @notice Completes a pending dust withdrawal and forwards it to `recipient`, unless a burn has
+  /// landed against it. The dust is not reclaimed to the Hub, as it was never counted as swept.
   /// @dev Requires a dust withdrawal to be pending, so it cannot pay out one queued by
   /// {initiateWithdrawal}. If the Gateway's available balance no longer covers `swept`, a burn has
   /// landed against the queued amount, which therefore holds money owed to Circle, possibly for
   /// further burns still pending. Nothing is paid out then: the withdrawal is finalized as {withdraw}
   /// does, returning it to the Hub up to `swept` and depositing any excess back into the Gateway.
   /// Real dust is left over-backing `swept`, and a later {initiateDustWithdrawal} collects it
-  /// @dev Assumes every burn lands within the Gateway's withdrawal delay. A burn still pending at
-  /// the claim leaves no trace in `available`, and a donation can offset the debit of another
-  /// that landed. Its funds are then paid out, leaving `swept` unbacked once it lands
+  /// @dev Assumes every burn lands before the claim. A burn still pending at the claim leaves no
+  /// trace in `available`, and a donation can offset the debit of another that landed. Its funds
+  /// are then paid out, leaving `swept` unbacked once it lands
   /// @dev `recipient` must hold DEFAULT_ADMIN_ROLE, a sanity check against paying dust out to a
   /// mistyped address
   /// @param recipient The address to receive the dust
@@ -378,8 +378,9 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   function getMaxFee() external view returns (uint256);
 
   /// @notice Returns the amount queued by {initiateDustWithdrawal} and not yet claimed
-  /// @dev Zero when no withdrawal is pending, and zero while a principal withdrawal is pending,
-  /// which is what {claimDust} checks to tell the two paths apart
+  /// @dev Zero while a principal withdrawal is pending, which is what {claimDust} checks to tell
+  /// the two paths apart. A burn that empties the queued amount leaves it set until a later
+  /// withdrawal is finalized
   /// @return The pending dust amount
   function getPendingDust() external view returns (uint256);
 
