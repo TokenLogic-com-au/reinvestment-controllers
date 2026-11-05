@@ -292,42 +292,6 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     assertEq(usdc.balanceOf(address(controller)), 0);
   }
 
-  /// @dev A burn can drain a queued dust withdrawal that holds no real dust, leaving `pendingDust`
-  /// set. A later principal withdrawal finalized through {claimDust} leaves available below swept,
-  /// so it is returned to the Hub as {withdraw} would
-  function test_claimDust_stalePendingDustFinalizesAsWithdraw() public {
-    _prepareDeferredBurn(INVESTED - CONFIGURED_FEE);
-
-    vm.prank(admin);
-    controller.initiateDustWithdrawal();
-
-    _burn(INVESTED - CONFIGURED_FEE, CONFIGURED_FEE);
-
-    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
-    assertEq(controller.getPendingDust(), INVESTED);
-
-    _unpause();
-    vm.warp(block.timestamp + INVEST_MIN_DELAY);
-    _invest(INVESTED);
-    _donate(DUST);
-    _pause();
-
-    vm.prank(admin);
-    controller.initiateWithdrawal();
-    vm.roll(block.number + WITHDRAWAL_DELAY);
-
-    uint256 aliceBefore = usdc.balanceOf(alice);
-
-    vm.prank(admin);
-    controller.claimDust(alice);
-
-    assertEq(usdc.balanceOf(alice), aliceBefore);
-    assertEq(hub.getAssetSwept(assetId), 0);
-    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED);
-    assertEq(wallet.availableBalance(address(usdc), address(controller)), DUST);
-    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
-  }
-
   function test_claimDust_revertsWith_NoDustWithdrawalInProcess_principalWithdrawal() public {
     vm.startPrank(admin);
     controller.claimDust(alice);

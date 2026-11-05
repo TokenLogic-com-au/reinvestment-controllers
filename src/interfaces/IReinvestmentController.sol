@@ -378,9 +378,8 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   function getMaxFee() external view returns (uint256);
 
   /// @notice Returns the amount queued by {initiateDustWithdrawal} and not yet claimed
-  /// @dev Zero while a principal withdrawal is pending, which is what {claimDust} checks to tell
-  /// the two paths apart. A burn that empties the queued amount leaves it set until a later
-  /// withdrawal is finalized
+  /// @dev Zero when no withdrawal is pending, and zero while a principal withdrawal is pending,
+  /// which is what {claimDust} checks to tell the two paths apart
   /// @return The pending dust amount
   function getPendingDust() external view returns (uint256);
 
