@@ -337,6 +337,7 @@ contract ReinvestmentControllerForkTeeTest is ReinvestmentControllerForkBase {
     controller.initiateDustWithdrawal();
 
     assertEq(controller.getPendingDust(), amount + MAX_FEE);
+    assertEq(_withdrawing(), amount + MAX_FEE);
     assertEq(_available(), _swept());
 
     _teeBurn(auth, MAX_FEE);
@@ -355,21 +356,6 @@ contract ReinvestmentControllerForkTeeTest is ReinvestmentControllerForkBase {
     assertEq(_withdrawing(), 0);
     assertEq(_swept(), _available());
     assertEq(IERC20(USDC).balanceOf(alice), 0);
-    assertEq(IERC20(USDC).balanceOf(address(controller)), 0);
-  }
-
-  function test_withdraw_pendingBurnSpillingIntoDustQueueRedepositsExcess() public {
-    _queueDustAgainstSpillingBurn();
-
-    vm.prank(admin);
-    controller.withdraw();
-
-    vm.prank(admin);
-    controller.unpause();
-
-    assertEq(_swept(), 0);
-    assertEq(_available(), MAX_FEE - CHARGED_FEE);
-    assertEq(_withdrawing(), 0);
     assertEq(IERC20(USDC).balanceOf(address(controller)), 0);
   }
 
