@@ -191,11 +191,14 @@ sequenceDiagram
     C->>U: transfer(Hub, reclaimAmount)
     C->>H: reclaim(assetId, reclaimAmount)
     H->>H: Increase liquidity and decrease swept by reclaimAmount
+    opt amount > reclaimAmount
+        C->>W: deposit(USDC, amount - reclaimAmount)
+    end
     A->>C: unpause()
     C->>C: Check no withdrawal in process
 ```
 
-`withdraw()` does not require the controller to be paused, so a pending withdrawal can always complete, and `unpause()` is refused until it does. A principal withdrawal never exceeds `swept`, so the `min` only binds when `withdraw()` finalizes a dust withdrawal that a burn spilled into, and the excess stays in the controller. Because `divest()` requires `A + Fcfg <= swept`, the last `Fcfg` of `swept` cannot be divested and leaves through this path.
+`withdraw()` does not require the controller to be paused, so a pending withdrawal can always complete, and `unpause()` is refused until it does. A principal withdrawal never exceeds `swept`, so the `min` only binds when `withdraw()` finalizes a dust withdrawal that a burn spilled into. The excess is deposited back into the Gateway, where it covers any burn still pending against it or is left as dust. Because `divest()` requires `A + Fcfg <= swept`, the last `Fcfg` of `swept` cannot be divested and leaves through this path.
 
 ## 6. Dust recovery
 
@@ -223,17 +226,21 @@ sequenceDiagram
     C->>C: pendingDust = 0
     C->>W: withdraw(USDC)
     W->>U: transfer(controller, withdrawing balance)
-    C->>C: shortfall = min(swept - available, withdrawing balance)
-    opt shortfall > 0
-        C->>U: transfer(Hub, shortfall)
-        C->>H: reclaim(assetId, shortfall)
+    alt available < swept
+        C->>C: reclaimAmount = min(withdrawing balance, swept)
+        C->>U: transfer(Hub, reclaimAmount)
+        C->>H: reclaim(assetId, reclaimAmount)
+        opt withdrawing balance > reclaimAmount
+            C->>W: deposit(USDC, withdrawing balance - reclaimAmount)
+        end
+    else
+        C->>U: transfer(recipient, withdrawing balance)
+        U-->>R: Recipient receives dust
     end
-    C->>U: transfer(recipient, withdrawing balance - shortfall)
-    U-->>R: Recipient receives dust
     A->>C: unpause()
 ```
 
-`available - swept` measures dust only after every burn has settled. `divest()` lowers `swept` at mint, but the Gateway balance drops only when Circle later burns, so between the two the difference is owed to a pending burn. If that burn lands during the withdrawal delay, it drains the available balance first and may spill into the queued amount. `claimDust()` pays the Hub first: it reclaims `swept - available` and forwards only the rest, so the recipient receives exactly the Gateway balance above `swept`. The reclaim is capped at the withdrawn amount, which only binds if the Gateway debited more than `divest()` accounted for.
+`available - swept` measures dust only after every burn has settled. `divest()` lowers `swept` at mint, but the Gateway balance drops only when Circle later burns, so between the two the difference is owed to a pending burn. If that burn lands during the withdrawal delay, it drains the available balance first and may spill into the queued amount. `available` then sits below `swept`, which shows the queue holds money owed to Circle, possibly for further burns still pending. `claimDust()` pays nothing out in that case and finalizes the withdrawal as `withdraw()` does. The real dust is left over-backing `swept`, and a later `initiateDustWithdrawal()` collects it. This relies on every burn landing within the withdrawal delay. A burn still pending at the claim cannot be seen on-chain, and a third-party donation during the delay can offset the debit of another burn that landed, which would otherwise expose it. Either way the claim pays the pending burn's funds out (see _Burn latency_ in the README).
 
 ## Fee accounting
 
