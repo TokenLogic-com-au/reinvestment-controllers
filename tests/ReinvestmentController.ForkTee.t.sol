@@ -285,8 +285,9 @@ contract ReinvestmentControllerForkTeeTest is ReinvestmentControllerForkBase {
 
   /// @dev {divest} lowers `swept` on the mint while the Gateway balance only drops once Circle
   /// burns, so a dust withdrawal queued in between includes money already owed. A burn larger than
-  /// the available balance spills into the queue, and the claim repays the Hub before paying out
-  function test_claimDust_pendingBurnSpillingIntoQueueRepaysHub() public {
+  /// the available balance spills into the queue. The claim repays all of `swept` and deposits the
+  /// excess back into the Gateway, where a second round collects it
+  function test_claimDust_pendingBurnSpillingIntoQueueRedepositsExcess() public {
     bytes32 adminRole = controller.DEFAULT_ADMIN_ROLE();
     vm.prank(admin);
     controller.grantRole(adminRole, alice);
@@ -296,17 +297,68 @@ contract ReinvestmentControllerForkTeeTest is ReinvestmentControllerForkBase {
     vm.prank(admin);
     controller.claimDust(alice);
 
+    assertEq(IERC20(USDC).balanceOf(alice), 0);
+    assertEq(_swept(), 0);
+    assertEq(_available(), MAX_FEE - CHARGED_FEE);
+    assertEq(_withdrawing(), 0);
+    assertEq(IERC20(USDC).balanceOf(address(controller)), 0);
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+    vm.roll(block.number + IGatewayWallet(GATEWAY_WALLET).withdrawalDelay());
+    vm.prank(admin);
+    controller.claimDust(alice);
+
     vm.prank(admin);
     controller.unpause();
 
     assertEq(IERC20(USDC).balanceOf(alice), MAX_FEE - CHARGED_FEE);
-    assertEq(_swept(), 0);
     assertEq(_available(), 0);
     assertEq(_withdrawing(), 0);
+  }
+
+  /// @dev A dust withdrawal queued before Circle burns holds the burn's funds. Once the burn
+  /// lands, available falls below `swept`, and the claim returns the whole queue to the Hub
+  function test_claimDust_pendingBurnReturnsWithdrawalToHub() public {
+    bytes32 adminRole = controller.DEFAULT_ADMIN_ROLE();
+    vm.prank(admin);
+    controller.grantRole(adminRole, alice);
+
+    uint256 invested = _investAll();
+    uint256 amount = invested / 4;
+    Authorization memory auth = _authorize(amount, 'a');
+
+    _mint(auth, keeper);
+
+    vm.prank(admin);
+    controller.pause();
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    assertEq(controller.getPendingDust(), amount + MAX_FEE);
+    assertEq(_available(), _swept());
+
+    _teeBurn(auth, MAX_FEE);
+
+    assertLt(_available(), _swept());
+
+    vm.roll(block.number + IGatewayWallet(GATEWAY_WALLET).withdrawalDelay());
+
+    vm.prank(admin);
+    controller.claimDust(alice);
+
+    vm.prank(admin);
+    controller.unpause();
+
+    assertEq(controller.getPendingDust(), 0);
+    assertEq(_withdrawing(), 0);
+    assertEq(_swept(), _available());
+    assertEq(IERC20(USDC).balanceOf(alice), 0);
     assertEq(IERC20(USDC).balanceOf(address(controller)), 0);
   }
 
-  function test_withdraw_pendingBurnSpillingIntoDustQueueIsCappedAtSwept() public {
+  function test_withdraw_pendingBurnSpillingIntoDustQueueRedepositsExcess() public {
     _queueDustAgainstSpillingBurn();
 
     vm.prank(admin);
@@ -316,9 +368,9 @@ contract ReinvestmentControllerForkTeeTest is ReinvestmentControllerForkBase {
     controller.unpause();
 
     assertEq(_swept(), 0);
-    assertEq(_available(), 0);
+    assertEq(_available(), MAX_FEE - CHARGED_FEE);
     assertEq(_withdrawing(), 0);
-    assertEq(IERC20(USDC).balanceOf(address(controller)), MAX_FEE - CHARGED_FEE);
+    assertEq(IERC20(USDC).balanceOf(address(controller)), 0);
   }
 
   function test_divest_revertsWith_TransferSpecHashUsed_duplicateSubmission() public {

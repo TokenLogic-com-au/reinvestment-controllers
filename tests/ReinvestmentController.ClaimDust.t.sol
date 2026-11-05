@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-BUSL
 pragma solidity 0.8.29;
 
+import {Vm} from 'forge-std/Vm.sol';
 import {IAccessControl} from '@openzeppelin/contracts/access/IAccessControl.sol';
 import {PausableUpgradeable} from '@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol';
 
@@ -74,9 +75,9 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
   }
 
   /// @dev {divest} lowers swept at mint while the Gateway balance only drops when Circle burns, so
-  /// a dust withdrawal queued in between includes money already owed. The burn drains the backing
-  /// first, and the claim returns that shortfall to the Hub before paying out `maxFee - fee`
-  function test_claimDust_pendingBurnShortfallIsReturnedToHub() public {
+  /// a dust withdrawal queued in between includes money already owed. Once the burn lands, the
+  /// claim returns the whole withdrawal to the Hub, and a second round collects the real dust
+  function test_claimDust_pendingBurnReturnsWithdrawalToHub() public {
     _prepareDeferredBurn(DIVESTED);
 
     vm.prank(admin);
@@ -91,28 +92,42 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     uint256 liquidityBefore = hub.getAssetLiquidity(assetId);
     uint256 aliceBefore = usdc.balanceOf(alice);
 
+    vm.recordLogs();
     vm.expectEmit(address(controller));
-    emit IReinvestmentController.WithdrawalCompleted(DIVESTED + CHARGED_FEE);
-    vm.expectEmit(address(controller));
-    emit IReinvestmentController.ClaimedDust(alice, CONFIGURED_FEE - CHARGED_FEE);
+    emit IReinvestmentController.WithdrawalCompleted(DIVESTED + CONFIGURED_FEE);
 
     vm.prank(admin);
     controller.claimDust(alice);
 
+    _assertNoClaimedDust();
+    assertEq(usdc.balanceOf(alice), aliceBefore);
+    assertEq(controller.getPendingDust(), 0);
+    assertEq(hub.getAssetSwept(assetId), sweptBefore - DIVESTED - CONFIGURED_FEE);
+    assertEq(hub.getAssetLiquidity(assetId), liquidityBefore + DIVESTED + CONFIGURED_FEE);
+    assertEq(
+      wallet.availableBalance(address(usdc), address(controller)),
+      hub.getAssetSwept(assetId) + CONFIGURED_FEE - CHARGED_FEE
+    );
+    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
+    assertEq(usdc.balanceOf(address(controller)), 0);
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+    vm.prank(admin);
+    controller.claimDust(alice);
+
     assertEq(usdc.balanceOf(alice) - aliceBefore, CONFIGURED_FEE - CHARGED_FEE);
-    assertEq(hub.getAssetSwept(assetId), sweptBefore - DIVESTED - CHARGED_FEE);
-    assertEq(hub.getAssetLiquidity(assetId), liquidityBefore + DIVESTED + CHARGED_FEE);
     assertEq(
       wallet.availableBalance(address(usdc), address(controller)),
       hub.getAssetSwept(assetId)
     );
-    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
-    assertEq(usdc.balanceOf(address(controller)), 0);
   }
 
   /// @dev A pending burn larger than the available balance spills into the queued withdrawal,
-  /// leaving it above swept. The claim repays the whole of swept and pays out the rest
-  function test_claimDust_pendingBurnSpillingIntoQueueRepaysHub() public {
+  /// leaving it above swept. The claim returns all of swept to the Hub and deposits the excess
+  /// back into the Gateway
+  function test_claimDust_pendingBurnSpillingIntoQueueRedepositsExcess() public {
     _prepareDeferredBurn(DIVESTED_MOST);
 
     vm.prank(admin);
@@ -127,22 +142,112 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     assertEq(wallet.availableBalance(address(usdc), address(controller)), 0);
     assertGt(wallet.withdrawingBalance(address(usdc), address(controller)), swept);
 
+    vm.recordLogs();
     vm.expectEmit(address(controller));
     emit IReinvestmentController.WithdrawalCompleted(swept);
-    vm.expectEmit(address(controller));
-    emit IReinvestmentController.ClaimedDust(alice, CONFIGURED_FEE - CHARGED_FEE);
 
     vm.prank(admin);
     controller.claimDust(alice);
 
+    _assertNoClaimedDust();
+
     vm.prank(admin);
     controller.unpause();
 
-    assertEq(usdc.balanceOf(alice) - aliceBefore, CONFIGURED_FEE - CHARGED_FEE);
+    assertEq(usdc.balanceOf(alice), aliceBefore);
     assertEq(hub.getAssetSwept(assetId), 0);
     assertEq(hub.getAssetLiquidity(assetId), SUPPLIED);
+    assertEq(
+      wallet.availableBalance(address(usdc), address(controller)),
+      CONFIGURED_FEE - CHARGED_FEE
+    );
     assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
     assertEq(usdc.balanceOf(address(controller)), 0);
+  }
+
+  /// @dev With two burns pending, the first landing during the withdrawal delay shows the queue
+  /// holds money owed to Circle. Returning all of it to the Hub keeps swept backed when the
+  /// second burn lands after the claim
+  function test_claimDust_secondPendingBurnStaysBacked() public {
+    _prepareDeferredBurns(DIVESTED, DIVESTED / 2);
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _burn(DIVESTED, CHARGED_FEE);
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    uint256 aliceBefore = usdc.balanceOf(alice);
+
+    vm.prank(admin);
+    controller.claimDust(alice);
+
+    _burn(DIVESTED / 2, CHARGED_FEE);
+
+    assertEq(usdc.balanceOf(alice), aliceBefore);
+    assertEq(
+      wallet.availableBalance(address(usdc), address(controller)),
+      hub.getAssetSwept(assetId) + 2 * (CONFIGURED_FEE - CHARGED_FEE)
+    );
+  }
+
+  /// @dev As above, but the first burn spills into the queue, so swept is fully repaid and the
+  /// excess deposited back into the Gateway. That deposit is what the second burn takes, even
+  /// after the controller has invested again
+  function test_claimDust_secondPendingBurnAfterSpillIsCoveredByRedeposit() public {
+    _prepareDeferredBurns(DIVESTED_MOST, DIVESTED / 2);
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _burn(DIVESTED_MOST, CHARGED_FEE);
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    vm.prank(admin);
+    controller.claimDust(alice);
+
+    assertEq(hub.getAssetSwept(assetId), 0);
+
+    _unpause();
+    vm.warp(block.timestamp + INVEST_MIN_DELAY);
+    _invest(INVESTED);
+
+    _burn(DIVESTED / 2, CHARGED_FEE);
+
+    assertEq(
+      wallet.availableBalance(address(usdc), address(controller)),
+      INVESTED + 2 * (CONFIGURED_FEE - CHARGED_FEE)
+    );
+    assertEq(hub.getAssetSwept(assetId), INVESTED);
+  }
+
+  /// @dev A donation during the withdrawal delay can cover a landed burn, keeping available at
+  /// swept. The claim then pays out the whole queue, and swept stays backed by the donation
+  function test_claimDust_donationCoveringLandedBurnIsPaidOut() public {
+    _prepareDeferredBurn(DIVESTED);
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _donate(DIVESTED + CHARGED_FEE);
+    _burn(DIVESTED, CHARGED_FEE);
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    uint256 sweptBefore = hub.getAssetSwept(assetId);
+    uint256 aliceBefore = usdc.balanceOf(alice);
+
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), sweptBefore);
+
+    vm.expectEmit(address(controller));
+    emit IReinvestmentController.ClaimedDust(alice, DIVESTED + CONFIGURED_FEE);
+
+    vm.prank(admin);
+    controller.claimDust(alice);
+
+    assertEq(usdc.balanceOf(alice) - aliceBefore, DIVESTED + CONFIGURED_FEE);
+    assertEq(hub.getAssetSwept(assetId), sweptBefore);
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), sweptBefore);
+    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
   }
 
   function test_claimDust(uint256 divested, uint256 chargedFee, uint256 donated) public {
@@ -176,21 +281,54 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     assertEq(usdc.balanceOf(address(controller)), 0);
   }
 
-  /// @dev A debit {divest} never accounted for can leave the shortfall above the withdrawn amount.
-  /// The Hub then takes all of it and nothing is paid out
-  function test_claimDust_shortfallAboveWithdrawnAmountIsCapped() public {
-    _burn(BURNED, 0);
+  function test_claimDust_secondBurnAfterClaim(
+    uint256 first,
+    uint256 second,
+    uint256 chargedFee
+  ) public {
+    first = bound(first, 1, INVESTED / 2);
+    second = bound(second, 1, INVESTED / 2 - 2 * CONFIGURED_FEE);
+    chargedFee = bound(chargedFee, 0, CONFIGURED_FEE);
 
-    uint256 liquidityBefore = hub.getAssetLiquidity(assetId);
+    _prepareDeferredBurns(first, second);
 
-    vm.expectEmit(address(controller));
-    emit IReinvestmentController.WithdrawalCompleted(DUST);
-    vm.expectEmit(address(controller));
-    emit IReinvestmentController.ClaimedDust(alice, 0);
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _burn(first, chargedFee);
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    uint256 aliceBefore = usdc.balanceOf(alice);
 
     vm.prank(admin);
     controller.claimDust(alice);
 
+    _burn(second, chargedFee);
+
+    uint256 available = wallet.availableBalance(address(usdc), address(controller));
+    uint256 swept = hub.getAssetSwept(assetId);
+
+    assertEq(usdc.balanceOf(alice), aliceBefore);
+    assertGe(available, swept);
+    assertEq(available - swept, 2 * (CONFIGURED_FEE - chargedFee));
+    assertEq(usdc.balanceOf(address(controller)), 0);
+  }
+
+  /// @dev A debit {divest} never accounted for also leaves available below swept, so the
+  /// withdrawal is returned to the Hub
+  function test_claimDust_unaccountedDebitReturnsWithdrawalToHub() public {
+    _burn(BURNED, 0);
+
+    uint256 liquidityBefore = hub.getAssetLiquidity(assetId);
+
+    vm.recordLogs();
+    vm.expectEmit(address(controller));
+    emit IReinvestmentController.WithdrawalCompleted(DUST);
+
+    vm.prank(admin);
+    controller.claimDust(alice);
+
+    _assertNoClaimedDust();
     assertEq(usdc.balanceOf(alice), 0);
     assertEq(hub.getAssetSwept(assetId), INVESTED - DUST);
     assertEq(hub.getAssetLiquidity(assetId), liquidityBefore + DUST);
@@ -199,9 +337,9 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
   }
 
   /// @dev A burn can drain a queued dust withdrawal that holds no real dust, leaving `pendingDust`
-  /// set. A later principal withdrawal can then be finalized through {claimDust}, which still only
-  /// pays out what the Gateway holds above swept
-  function test_claimDust_stalePendingDustPaysOnlyExcessOverSwept() public {
+  /// set. A later principal withdrawal finalized through {claimDust} leaves available below swept,
+  /// so it is returned to the Hub as {withdraw} would
+  function test_claimDust_stalePendingDustFinalizesAsWithdraw() public {
     _prepareDeferredBurn(INVESTED - CONFIGURED_FEE);
 
     vm.prank(admin);
@@ -227,9 +365,9 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     vm.prank(admin);
     controller.claimDust(alice);
 
-    assertEq(usdc.balanceOf(alice) - aliceBefore, DUST);
-    assertEq(hub.getAssetSwept(assetId), DUST);
-    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED - DUST);
+    assertEq(usdc.balanceOf(alice), aliceBefore);
+    assertEq(hub.getAssetSwept(assetId), 0);
+    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED);
     assertEq(wallet.availableBalance(address(usdc), address(controller)), DUST);
     assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
   }
@@ -319,6 +457,26 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     _unpause();
     _setMaxFee(CONFIGURED_FEE);
     _divestWithDeferredBurn(amount);
+    _pause();
+  }
+
+  /// @dev Fails if the controller emitted {ClaimedDust} since `vm.recordLogs`
+  function _assertNoClaimedDust() internal view {
+    Vm.Log[] memory logs = vm.getRecordedLogs();
+    for (uint256 i = 0; i < logs.length; i++) {
+      if (logs[i].emitter != address(controller)) continue;
+      assertNotEq(logs[i].topics[0], IReinvestmentController.ClaimedDust.selector);
+    }
+  }
+
+  /// @dev As {_prepareDeferredBurn}, with two divests whose burns are both deferred
+  function _prepareDeferredBurns(uint256 first, uint256 second) internal {
+    vm.prank(admin);
+    controller.claimDust(alice);
+    _unpause();
+    _setMaxFee(CONFIGURED_FEE);
+    _divestWithDeferredBurn(first);
+    _divestWithDeferredBurn(second);
     _pause();
   }
 }
