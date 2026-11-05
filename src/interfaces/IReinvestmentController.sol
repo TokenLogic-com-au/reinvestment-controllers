@@ -93,7 +93,7 @@ interface IReinvestmentController is IERC1271, IAccessControl {
 
   /// @dev Emitted when dust is recovered from Gateway
   /// @param recipient Address receiving the dust
-  /// @param amount The amount of dust transferred, after any shortfall is returned to the Hub
+  /// @param amount The amount of dust transferred
   event ClaimedDust(address indexed recipient, uint256 amount);
 
   /// @notice Emitted when a dust withdrawal is initiated at the Gateway
@@ -212,7 +212,8 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// @notice Finalizes a pending withdrawal after required time has elapsed
   /// @dev Returns the withdrawn funds to the Hub, capped at `swept`, since {reclaim} can only take
   /// back what was swept. A withdrawal queued by {initiateWithdrawal} never exceeds `swept`, so the
-  /// cap only binds when finalizing a dust withdrawal, and any excess stays in this contract
+  /// cap only binds when finalizing a dust withdrawal. Any excess is deposited back into the
+  /// Gateway, where it covers a burn still pending against it or is left as dust
   /// @dev {reclaim} is restricted to the Hub's configured controller, so repointing the Hub at a
   /// different controller while a withdrawal is pending makes this revert until it is pointed back.
   /// If the replacement also reduced `swept` below the pending amount, the reclaim stays blocked
@@ -228,16 +229,21 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// @dev Sizes the withdrawal as `available - swept`, which measures surplus only once every burn
   /// has settled. {divest} lowers `swept` when it mints, while the Gateway balance drops later when
   /// Circle burns, so in between the difference is money already owed and this queues too much.
-  /// {claimDust} returns that part to the Hub before paying out
+  /// If a burn lands against it during the withdrawal delay, {claimDust} returns the withdrawal to
+  /// the Hub instead of paying it out
   function initiateDustWithdrawal() external;
 
   /// @notice Completes a pending dust withdrawal and forwards it to `recipient`. The dust is
   /// not reclaimed to the Hub, as it was never counted as swept.
   /// @dev Requires a dust withdrawal to be pending, so it cannot pay out one queued by
-  /// {initiateWithdrawal}. The Hub is paid first: if the Gateway's available balance no longer
-  /// covers `swept`, as when a burn lands against the queued amount, the shortfall is reclaimed to
-  /// the Hub and only the rest is forwarded to `recipient`. The reclaim is capped at the withdrawn
-  /// amount, which only binds if the Gateway debited more than {divest} accounted for
+  /// {initiateWithdrawal}. If the Gateway's available balance no longer covers `swept`, a burn has
+  /// landed against the queued amount, which therefore holds money owed to Circle, possibly for
+  /// further burns still pending. Nothing is paid out then: the withdrawal is finalized as {withdraw}
+  /// does, returning it to the Hub up to `swept` and depositing any excess back into the Gateway.
+  /// Real dust is left over-backing `swept`, and a later {initiateDustWithdrawal} collects it
+  /// @dev Assumes every burn lands within the Gateway's withdrawal delay. A burn still pending at
+  /// the claim leaves no trace in `available`, and a donation can offset the debit of another
+  /// that landed. Its funds are then paid out, leaving `swept` unbacked once it lands
   /// @dev `recipient` must hold DEFAULT_ADMIN_ROLE, a sanity check against paying dust out to a
   /// mistyped address
   /// @param recipient The address to receive the dust

@@ -221,8 +221,7 @@ contract ReinvestmentController is
 
     GATEWAY_WALLET.withdraw(address(USDC));
 
-    // TODO: define what to do if dust > 0. Options: make contract rescuable, send back to gateway, accept recipient.
-    uint256 dust = _cappedReclaim(withdrawingBalance);
+    _cappedReclaim(withdrawingBalance);
   }
 
   /// @inheritdoc IReinvestmentController
@@ -254,16 +253,13 @@ contract ReinvestmentController is
 
     GATEWAY_WALLET.withdraw(address(USDC));
 
-    uint256 hubShortfall = Math.saturatingSub(HUB.getAssetSwept(ASSET_ID), _availableBalance());
-    uint256 dust = 0;
-    if (hubShortfall > 0) {
-      dust = _cappedReclaim(withdrawingBalance);
+    if (_availableBalance() < HUB.getAssetSwept(ASSET_ID)) {
+      _cappedReclaim(withdrawingBalance);
+      return;
     }
 
-    if (dust > 0) {
-      USDC.safeTransfer(recipient, dust);
-      emit ClaimedDust(recipient, dust);
-    }
+    USDC.safeTransfer(recipient, withdrawingBalance);
+    emit ClaimedDust(recipient, withdrawingBalance);
   }
 
   /// @inheritdoc IReinvestmentController
@@ -536,15 +532,22 @@ contract ReinvestmentController is
     require(spec.getDestinationCaller() == self, InvalidDestinationCaller());
   }
 
-  /// @dev Sends the maximum possible reclaimable amount to the hub, and returns the remaining unspent balance.
-  /// Unspent balance is greater than 0 only if the hub is fully liquid after the reclaim.
-  function _cappedReclaim(uint256 withdrawingBalance) internal returns (uint256) {
-    uint256 hubSwept = HUB.getAssetSwept(ASSET_ID);
-    uint256 reclaimAmount = Math.min(withdrawingBalance, hubSwept);
+  /// @dev Returns withdrawn funds to the Hub, capped at `swept` since {reclaim} cannot take back
+  /// more. Any excess is deposited back into the Gateway, where it covers a burn that may still be
+  /// pending against it, or is otherwise left as dust for {initiateDustWithdrawal}
+  /// @param withdrawn The amount just withdrawn from the Gateway
+  function _cappedReclaim(uint256 withdrawn) internal {
+    uint256 reclaimAmount = Math.min(withdrawn, HUB.getAssetSwept(ASSET_ID));
+
     USDC.safeTransfer(address(HUB), reclaimAmount);
     HUB.reclaim(ASSET_ID, reclaimAmount);
+
     emit WithdrawalCompleted(reclaimAmount);
 
-    return Math.saturatingSub(withdrawingBalance, hubSwept);
+    uint256 excess = withdrawn - reclaimAmount;
+    if (excess > 0) {
+      USDC.forceApprove(address(GATEWAY_WALLET), excess);
+      GATEWAY_WALLET.deposit(address(USDC), excess);
+    }
   }
 }
