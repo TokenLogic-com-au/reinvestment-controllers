@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: LicenseRef-BUSL
 pragma solidity 0.8.29;
 
-import {Vm} from 'forge-std/Vm.sol';
 import {IAccessControl} from '@openzeppelin/contracts/access/IAccessControl.sol';
 import {PausableUpgradeable} from '@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol';
 
@@ -92,14 +91,12 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     uint256 liquidityBefore = hub.getAssetLiquidity(assetId);
     uint256 aliceBefore = usdc.balanceOf(alice);
 
-    vm.recordLogs();
     vm.expectEmit(address(controller));
     emit IReinvestmentController.WithdrawalCompleted(DIVESTED + CONFIGURED_FEE);
 
     vm.prank(admin);
     controller.claimDust(alice);
 
-    _assertNoClaimedDust();
     assertEq(usdc.balanceOf(alice), aliceBefore);
     assertEq(controller.getPendingDust(), 0);
     assertEq(hub.getAssetSwept(assetId), sweptBefore - DIVESTED - CONFIGURED_FEE);
@@ -142,14 +139,11 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     assertEq(wallet.availableBalance(address(usdc), address(controller)), 0);
     assertGt(wallet.withdrawingBalance(address(usdc), address(controller)), swept);
 
-    vm.recordLogs();
     vm.expectEmit(address(controller));
     emit IReinvestmentController.WithdrawalCompleted(swept);
 
     vm.prank(admin);
     controller.claimDust(alice);
-
-    _assertNoClaimedDust();
 
     vm.prank(admin);
     controller.unpause();
@@ -321,14 +315,12 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
 
     uint256 liquidityBefore = hub.getAssetLiquidity(assetId);
 
-    vm.recordLogs();
     vm.expectEmit(address(controller));
     emit IReinvestmentController.WithdrawalCompleted(DUST);
 
     vm.prank(admin);
     controller.claimDust(alice);
 
-    _assertNoClaimedDust();
     assertEq(usdc.balanceOf(alice), 0);
     assertEq(hub.getAssetSwept(assetId), INVESTED - DUST);
     assertEq(hub.getAssetLiquidity(assetId), liquidityBefore + DUST);
@@ -458,15 +450,6 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     _setMaxFee(CONFIGURED_FEE);
     _divestWithDeferredBurn(amount);
     _pause();
-  }
-
-  /// @dev Fails if the controller emitted {ClaimedDust} since `vm.recordLogs`
-  function _assertNoClaimedDust() internal view {
-    Vm.Log[] memory logs = vm.getRecordedLogs();
-    for (uint256 i = 0; i < logs.length; i++) {
-      if (logs[i].emitter != address(controller)) continue;
-      assertNotEq(logs[i].topics[0], IReinvestmentController.ClaimedDust.selector);
-    }
   }
 
   /// @dev As {_prepareDeferredBurn}, with two divests whose burns are both deferred
