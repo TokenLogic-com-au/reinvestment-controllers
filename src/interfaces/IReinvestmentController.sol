@@ -382,7 +382,9 @@ interface IReinvestmentController is IERC1271, IAccessControl {
 
   /// @notice Returns the amount queued by {initiateDustWithdrawal} and not yet claimed
   /// @dev Zero when no withdrawal is pending, and zero while a principal withdrawal is pending,
-  /// which is what {claimDust} checks to tell the two paths apart
+  /// which is what {claimDust} checks to tell the two paths apart. The exception is a dust
+  /// withdrawal a burn took whole, which is still reported until {unpause} or
+  /// {initiateWithdrawal} clears it, or {initiateDustWithdrawal} replaces it
   /// @return The pending dust amount
   function getPendingDust() external view returns (uint256);
 
