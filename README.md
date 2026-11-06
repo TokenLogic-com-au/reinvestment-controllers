@@ -113,7 +113,9 @@ The Gateway is Circle's. We depend on them for:
   burn always follows a `divest`. The controller cannot observe or enforce this ordering.
 - **Burn latency.** Dust recovery relies on one condition: every burn lands before the
   dust claim, which runs no earlier than the withdrawal delay after the dust withdrawal is
-  queued. A burn landing after the claim is the only way a claim can pay out funds that are
+  queued. Burns landing after the claim are out of scope: the controller does not guard
+  against them, and recovering from one is a manual treasury action.
+  A burn landing after the claim is the only way a claim can pay out funds that are
   not dust. Every burn that lands earlier is caught, and the donation case below still needs
   another burn to be late.
   `claimDust` can only tell that a queued dust withdrawal holds money owed to Circle from
