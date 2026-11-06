@@ -88,7 +88,10 @@ drains the available balance backing `swept`, and may spill into the queued amou
 is larger than what is available. Either way, after the Gateway pays out, `available` is
 below `swept`, which shows the queue holds money owed to Circle, possibly for further
 burns still pending. `claimDust` then pays nothing out and finalizes the withdrawal as
-`withdraw` does. Otherwise it forwards the whole queued amount.
+`withdraw` does. Otherwise it forwards the whole queued amount. With `swept` at zero, a
+burn can take the whole queue, leaving nothing to complete; `unpause` and
+`initiateWithdrawal` then discard the dust withdrawal, so `claimDust` cannot later pay
+out a principal withdrawal as dust.
 
 `withdraw` returns withdrawn funds to the Hub capped at `swept`, since the Hub can take
 back no more, and deposits any excess back into the Gateway. A principal withdrawal
