@@ -533,16 +533,19 @@ contract ReinvestmentController is
   }
 
   /// @dev Returns withdrawn funds to the Hub, capped at `swept` since {reclaim} cannot take back
-  /// more. Any excess is deposited back into the Gateway, where it covers a burn that may still be
-  /// pending against it, or is otherwise left as dust for {initiateDustWithdrawal}
+  /// more, and skipped when `swept` is zero since the Hub rejects a zero reclaim. Any excess is
+  /// deposited back into the Gateway, where it covers a burn that may still be pending against it,
+  /// or is otherwise left as dust for {initiateDustWithdrawal}
   /// @param withdrawn The amount just withdrawn from the Gateway
   function _cappedReclaim(uint256 withdrawn) internal {
     uint256 reclaimAmount = Math.min(withdrawn, HUB.getAssetSwept(ASSET_ID));
 
-    USDC.safeTransfer(address(HUB), reclaimAmount);
-    HUB.reclaim(ASSET_ID, reclaimAmount);
+    if (reclaimAmount > 0) {
+      USDC.safeTransfer(address(HUB), reclaimAmount);
+      HUB.reclaim(ASSET_ID, reclaimAmount);
 
-    emit WithdrawalCompleted(reclaimAmount);
+      emit WithdrawalCompleted(reclaimAmount);
+    }
 
     uint256 excess = withdrawn - reclaimAmount;
     if (excess > 0) {

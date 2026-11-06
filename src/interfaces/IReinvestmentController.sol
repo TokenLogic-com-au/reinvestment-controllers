@@ -213,12 +213,11 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// @dev Returns the withdrawn funds to the Hub, capped at `swept`, since {reclaim} can only take
   /// back what was swept. A withdrawal queued by {initiateWithdrawal} never exceeds `swept`, so the
   /// cap only binds when finalizing a dust withdrawal. Any excess is deposited back into the
-  /// Gateway, where it covers a burn still pending against it or is left as dust.
+  /// Gateway, where it covers a burn still pending against it or is left as dust. With `swept` at
+  /// zero the Hub is not called and the whole withdrawal is deposited back.
   /// {reclaim} is restricted to the Hub's configured controller, so repointing the Hub at a
   /// different controller while a withdrawal is pending makes this revert until it is pointed back.
-  /// If the replacement also took `swept` to zero, it stays blocked, as the Hub rejects a zero
-  /// reclaim. The funds remain claimable in the Gateway in both cases, and
-  /// the implementation sits behind a proxy, so a state this code cannot resolve can be addressed
+  /// The funds remain claimable in the Gateway, and the implementation sits behind a proxy, so a state this code cannot resolve can be addressed
   /// by upgrading it
   function withdraw() external;
 
@@ -242,8 +241,9 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// does, returning it to the Hub up to `swept` and depositing any excess back into the Gateway.
   /// Real dust is left over-backing `swept`, and a later {initiateDustWithdrawal} collects it
   /// @dev Assumes every burn lands before the claim. A burn still pending at the claim leaves no
-  /// trace in `available`, and a donation can offset the debit of another that landed. Its funds
-  /// are then paid out, leaving `swept` unbacked once it lands
+  /// trace in `available`, and neither does one that landed while `swept` is zero or whose debit a
+  /// donation offset. Its funds are then paid out, leaving `swept` unbacked once it lands, or,
+  /// with `swept` at zero, leaving the burn short with the Hub unaffected
   /// @dev `recipient` must hold DEFAULT_ADMIN_ROLE, a sanity check against paying dust out to a
   /// mistyped address
   /// @param recipient The address to receive the dust
