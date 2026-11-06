@@ -203,6 +203,8 @@ contract ReinvestmentController is
 
     require(amount > 0, InvalidAmount());
 
+    _clearPendingDust();
+
     GATEWAY_WALLET.initiateWithdrawal(address(USDC), amount);
 
     emit WithdrawalInitiated(amount);
@@ -214,10 +216,7 @@ contract ReinvestmentController is
 
     require(withdrawingBalance > 0, NoWithdrawalInProcess());
 
-    ReinvestmentControllerStorage storage $ = _getReinvestmentControllerStorage();
-    if ($.pendingDust > 0) {
-      $.pendingDust = 0;
-    }
+    _clearPendingDust();
 
     GATEWAY_WALLET.withdraw(address(USDC));
 
@@ -270,6 +269,8 @@ contract ReinvestmentController is
   /// @inheritdoc IReinvestmentController
   function unpause() external onlyRole(DEFAULT_ADMIN_ROLE) {
     require(_withdrawingBalance() == 0, WithdrawalInProcess());
+
+    _clearPendingDust();
 
     _unpause();
   }
@@ -428,6 +429,16 @@ contract ReinvestmentController is
     uint256 oldExposureCapBps = $.exposureCapBps;
     $.exposureCapBps = newExposureCapBps;
     emit SetExposureCapBps(oldExposureCapBps, newExposureCapBps);
+  }
+
+  /// @dev Clears a dust withdrawal that is no longer the pending one. A burn can take a whole
+  /// queued dust withdrawal, leaving nothing for {claimDust} to complete, and a stale value would
+  /// let {claimDust} pay out the next withdrawal queued by {initiateWithdrawal}
+  function _clearPendingDust() internal {
+    ReinvestmentControllerStorage storage $ = _getReinvestmentControllerStorage();
+    if ($.pendingDust > 0) {
+      $.pendingDust = 0;
+    }
   }
 
   /// @dev Refuses to stack a withdrawal on top of another. Checked before either path (dust/withdraw)
