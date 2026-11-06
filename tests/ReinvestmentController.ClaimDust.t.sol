@@ -337,6 +337,40 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     controller.claimDust(alice);
   }
 
+  /// @dev After a full divest, the pending burn takes the whole queued dust withdrawal. Once the
+  /// controller invests again, a principal withdrawal is not treated as dust, even with a
+  /// donation keeping swept covered
+  function test_claimDust_revertsWith_NoDustWithdrawalInProcess_principalWithdrawalAfterEmptiedDust()
+    public
+  {
+    vm.prank(admin);
+    controller.claimDust(alice);
+
+    _unpause();
+    _divestWithDeferredBurn(INVESTED);
+    _pause();
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _burn(INVESTED, 0);
+    _unpause();
+
+    vm.warp(block.timestamp + INVEST_MIN_DELAY);
+    _invest(DIVESTED);
+    _donate(DIVESTED);
+    _pause();
+
+    vm.prank(admin);
+    controller.initiateWithdrawal();
+
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    vm.expectRevert(IReinvestmentController.NoDustWithdrawalInProcess.selector);
+    vm.prank(admin);
+    controller.claimDust(alice);
+  }
+
   function test_claimDust_revertsWith_AccessControlUnauthorizedAccount_keeper() public {
     bytes32 adminRole = controller.DEFAULT_ADMIN_ROLE();
 

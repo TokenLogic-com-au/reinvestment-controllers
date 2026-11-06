@@ -35,6 +35,28 @@ contract ReinvestmentControllerUnpauseTest is ReinvestmentControllerTestBase {
     assertEq(controller.getInvestedAmount(), 1_000e6);
   }
 
+  /// @dev After a full divest, the pending burn takes the whole queued dust withdrawal, leaving
+  /// nothing for {claimDust} to complete
+  function test_unpause_clearsPendingDust() public {
+    _unpause();
+    _invest(1_000e6);
+    _divestWithDeferredBurn(1_000e6);
+    _pause();
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _burn(1_000e6, 0);
+
+    assertEq(controller.getPendingDust(), 1_000e6);
+    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
+
+    vm.prank(admin);
+    controller.unpause();
+
+    assertEq(controller.getPendingDust(), 0);
+  }
+
   function test_unpause_revertsWith_AccessControlUnauthorizedAccount_pauserCannotUndoItsOwnHalt()
     public
   {
