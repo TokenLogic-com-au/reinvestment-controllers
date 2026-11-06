@@ -80,16 +80,27 @@ accounting. This way treasury can reclaim the excess fees it paid if it is the r
 `available - swept` only measures surplus once every burn has settled. `divest` lowers
 `swept` as soon as it mints, while the Gateway balance drops minutes later when Circle
 burns, so between those two points the difference is money already owed rather than
-dust. `initiateDustWithdrawal` cannot tell the two apart and would queue the pending
-burn's amount, so it should only be called once `available` has settled at `swept` plus
-whatever was donated.
+dust. `initiateDustWithdrawal` cannot tell the two apart and queues the pending burn's
+amount along with the dust.
 
-`claimDust` is what makes that safe: after the Gateway pays out, it requires
-`available >= swept`, so dust can only leave while the Hub's claim stays fully backed.
-If a burn lands against a queued amount, the claim reverts and the funds stay in the
-Gateway's withdrawing balance, where `withdraw` returns them to the Hub and squares the
-books. Any genuine dust is still reachable afterwards through a fresh
-`initiateDustWithdrawal`.
+`claimDust` is what makes that safe. When the burn lands during the withdrawal delay, it
+drains the available balance backing `swept`, and may spill into the queued amount if it
+is larger than what is available. Either way, after the Gateway pays out, `available` is
+below `swept`, which shows the queue holds money owed to Circle, possibly for further
+burns still pending. `claimDust` then pays nothing out and finalizes the withdrawal as
+`withdraw` does. Otherwise it forwards the whole queued amount.
+
+`withdraw` returns withdrawn funds to the Hub capped at `swept`, since the Hub can take
+back no more, and deposits any excess back into the Gateway. A principal withdrawal
+never exceeds `swept`, so the cap only binds when a burn spills into a queued dust
+withdrawal. With `swept` at zero, nothing is reclaimed and the whole withdrawal goes back.
+The re-deposited excess covers any burn still pending against it, even after
+the controller invests again. What is left over-backs `swept` as dust, and a later
+`initiateDustWithdrawal` collects it once no burn lands during its delay.
+
+This catches a burn only once it has landed, and only while its debit is still visible
+in `available`. It therefore relies on every burn landing before the claim, the one
+assumption dust recovery depends on; see _Burn latency_ under Trust assumptions.
 
 ## Trust assumptions
 
@@ -100,6 +111,29 @@ The Gateway is Circle's. We depend on them for:
   Circle's API. Transaction size limit is imposed by the API.
 - **Burns.** Circle burns an intent only after observing its mint in a finalized block, so a
   burn always follows a `divest`. The controller cannot observe or enforce this ordering.
+- **Burn latency.** Dust recovery relies on one condition: every burn lands before the
+  dust claim, which runs no earlier than the withdrawal delay after the dust withdrawal is
+  queued. Burns landing after the claim are out of scope: the controller does not guard
+  against them, and recovering from one is a manual treasury action.
+  A burn landing after the claim is the only way a claim can pay out funds that are
+  not dust. Every burn that lands earlier is caught, and the donation case below still needs
+  another burn to be late.
+  `claimDust` can only tell that a queued dust withdrawal holds money owed to Circle from
+  `available` falling below `swept`, which takes a burn that has already landed. A burn
+  still pending when the claim runs leaves no such trace, since the state then reads the
+  same as one holding only real dust. With several burns pending, one that lands during
+  the delay exposes the rest, but a third-party `depositFor` during the delay can offset
+  its debit and hide them again, since `available` cannot tell a donation from the balance
+  the burn took. Nor does a landed burn expose the rest once the divests have taken `swept`
+  to zero, as `available` cannot fall below it. Either way the claim pays the pending
+  burn's funds to the recipient, and that burn leaves `swept` unbacked by its amount once
+  it lands. With `swept` at zero the Hub is unaffected, and the burn lands short instead,
+  against an empty balance. A donor gains nothing:
+  hiding a landed burn costs at least its amount, for a shortfall that still needs another
+  burn to be late. The recipient holds the admin role, so treasury can restore the balance
+  with `depositFor`. Circle settles burns minutes after a mint, against a delay of days,
+  but the delay is owner controlled (see _Withdrawal delay_), and shortening it narrows
+  that margin.
 - **Batch adjustments.** A signer registered by the wallet's owner can debit the controller's
   Gateway balance through `submitBatch`, with no signature from us and no burn intent. The
   controller never registers such a signer and cannot decline one, since the debit path checks
