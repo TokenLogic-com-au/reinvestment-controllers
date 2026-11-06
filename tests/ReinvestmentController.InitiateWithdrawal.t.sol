@@ -10,6 +10,7 @@ import {ReinvestmentControllerTestBase} from './ReinvestmentController.Base.t.so
 
 contract ReinvestmentControllerInitiateWithdrawalTest is ReinvestmentControllerTestBase {
   uint256 internal constant INVESTED = 400_000e6;
+  uint256 internal constant DUST = 1_000e6;
 
   function setUp() public override {
     super.setUp();
@@ -35,6 +36,23 @@ contract ReinvestmentControllerInitiateWithdrawalTest is ReinvestmentControllerT
     assertEq(hub.getAssetLiquidity(assetId), SUPPLIED - INVESTED);
     assertEq(usdc.balanceOf(address(controller)), 0);
     assertEq(usdc.balanceOf(address(wallet)), INVESTED);
+  }
+
+  /// @dev A debit the controller did not account for, such as a batch adjustment, can take a whole
+  /// queued dust withdrawal while swept is above zero
+  function test_initiateWithdrawal_clearsPendingDust() public {
+    _donate(DUST);
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _burn(INVESTED + DUST, 0);
+    _donate(DUST);
+
+    vm.prank(admin);
+    controller.initiateWithdrawal();
+
+    assertEq(controller.getPendingDust(), 0);
   }
 
   function test_initiateWithdrawal(uint256 burned) public {
