@@ -228,8 +228,32 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
   }
 
+  /// @dev With swept at zero a landed burn leaves available at swept, so a second burn still
+  /// pending is not exposed. The claim pays out its funds, and the Hub has nothing left to back
+  function test_claimDust_landedBurnAtZeroSweptIsPaidOut() public {
+    _prepareDeferredBurns(DIVESTED, INVESTED - DIVESTED - 2 * CONFIGURED_FEE);
+
+    assertEq(hub.getAssetSwept(assetId), 0);
+
+    vm.prank(admin);
+    controller.initiateDustWithdrawal();
+
+    _burn(DIVESTED, CHARGED_FEE);
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    uint256 aliceBefore = usdc.balanceOf(alice);
+
+    vm.prank(admin);
+    controller.claimDust(alice);
+
+    assertEq(usdc.balanceOf(alice) - aliceBefore, INVESTED - DIVESTED - CHARGED_FEE);
+    assertEq(hub.getAssetSwept(assetId), 0);
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), 0);
+    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
+  }
+
   function test_claimDust(uint256 divested, uint256 chargedFee, uint256 donated) public {
-    divested = bound(divested, 1, INVESTED - CONFIGURED_FEE);
+    divested = bound(divested, 1, INVESTED - CONFIGURED_FEE - 1);
     chargedFee = bound(chargedFee, 0, CONFIGURED_FEE);
     donated = bound(donated, 0, DUST);
 
@@ -265,7 +289,7 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     uint256 chargedFee
   ) public {
     first = bound(first, 1, INVESTED / 2);
-    second = bound(second, 1, INVESTED / 2 - 2 * CONFIGURED_FEE);
+    second = bound(second, 1, INVESTED / 2 - 2 * CONFIGURED_FEE - 1);
     chargedFee = bound(chargedFee, 0, CONFIGURED_FEE);
 
     _prepareDeferredBurns(first, second);

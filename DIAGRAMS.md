@@ -188,9 +188,11 @@ sequenceDiagram
     W->>U: transfer(controller, withdrawing balance)
     U-->>C: Controller receives amount
     C->>C: reclaimAmount = min(amount, swept)
-    C->>U: transfer(Hub, reclaimAmount)
-    C->>H: reclaim(assetId, reclaimAmount)
-    H->>H: Increase liquidity and decrease swept by reclaimAmount
+    opt reclaimAmount > 0
+        C->>U: transfer(Hub, reclaimAmount)
+        C->>H: reclaim(assetId, reclaimAmount)
+        H->>H: Increase liquidity and decrease swept by reclaimAmount
+    end
     opt amount > reclaimAmount
         C->>W: deposit(USDC, amount - reclaimAmount)
     end
@@ -240,7 +242,7 @@ sequenceDiagram
     A->>C: unpause()
 ```
 
-`available - swept` measures dust only after every burn has settled. `divest()` lowers `swept` at mint, but the Gateway balance drops only when Circle later burns, so between the two the difference is owed to a pending burn. If that burn lands during the withdrawal delay, it drains the available balance first and may spill into the queued amount. `available` then sits below `swept`, which shows the queue holds money owed to Circle, possibly for further burns still pending. `claimDust()` pays nothing out in that case and finalizes the withdrawal as `withdraw()` does. The real dust is left over-backing `swept`, and a later `initiateDustWithdrawal()` collects it. This relies on every burn landing within the withdrawal delay. A burn still pending at the claim cannot be seen on-chain, and a third-party donation during the delay can offset the debit of another burn that landed, which would otherwise expose it. Either way the claim pays the pending burn's funds out (see _Burn latency_ in the README).
+`available - swept` measures dust only after every burn has settled. `divest()` lowers `swept` at mint, but the Gateway balance drops only when Circle later burns, so between the two the difference is owed to a pending burn. If that burn lands during the withdrawal delay, it drains the available balance first and may spill into the queued amount. `available` then sits below `swept`, which shows the queue holds money owed to Circle, possibly for further burns still pending. `claimDust()` pays nothing out in that case and finalizes the withdrawal as `withdraw()` does. The real dust is left over-backing `swept`, and a later `initiateDustWithdrawal()` collects it. This relies on every burn landing within the withdrawal delay. A burn still pending at the claim cannot be seen on-chain, and a third-party donation during the delay can offset the debit of another burn that landed, which would otherwise expose it. A landed burn exposes nothing either once `swept` is zero, as `available` cannot fall below it. Either way the claim pays the pending burn's funds out (see _Burn latency_ in the README).
 
 ## Fee accounting
 

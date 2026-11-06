@@ -6,7 +6,6 @@ import {IAccessControl} from '@openzeppelin/contracts/access/IAccessControl.sol'
 import {IReinvestmentController} from '../src/interfaces/IReinvestmentController.sol';
 
 import {ReinvestmentControllerTestBase} from './ReinvestmentController.Base.t.sol';
-import {MockHub} from './mocks/MockHub.sol';
 
 contract ReinvestmentControllerWithdrawTest is ReinvestmentControllerTestBase {
   // From GatewayWallet
@@ -181,9 +180,9 @@ contract ReinvestmentControllerWithdrawTest is ReinvestmentControllerTestBase {
     );
   }
 
-  /// @dev With swept at zero there is nothing to reclaim, and the Hub rejects a zero reclaim.
-  /// {claimDust} is the exit for that queue
-  function test_withdraw_revertsWith_InvalidAmount_dustQueueAfterFullDivest() public {
+  /// @dev With swept at zero there is nothing to reclaim, so the Hub is not called and the whole
+  /// queue is deposited back into the Gateway
+  function test_withdraw_dustQueueAfterFullDivestRedepositsAll() public {
     _unpause();
 
     vm.prank(keeper);
@@ -197,9 +196,17 @@ contract ReinvestmentControllerWithdrawTest is ReinvestmentControllerTestBase {
 
     vm.roll(block.number + WITHDRAWAL_DELAY);
 
-    vm.expectRevert(MockHub.InvalidAmount.selector);
     vm.prank(admin);
     controller.withdraw();
+
+    vm.prank(admin);
+    controller.unpause();
+
+    assertEq(hub.getAssetSwept(assetId), 0);
+    assertEq(hub.getAssetLiquidity(assetId), SUPPLIED);
+    assertEq(usdc.balanceOf(address(controller)), 0);
+    assertEq(wallet.withdrawingBalance(address(usdc), address(controller)), 0);
+    assertEq(wallet.availableBalance(address(usdc), address(controller)), DUST);
   }
 
   function test_withdraw_revertsWith_WithdrawalNotYetAvailable() public {

@@ -93,7 +93,8 @@ burns still pending. `claimDust` then pays nothing out and finalizes the withdra
 `withdraw` returns withdrawn funds to the Hub capped at `swept`, since the Hub can take
 back no more, and deposits any excess back into the Gateway. A principal withdrawal
 never exceeds `swept`, so the cap only binds when a burn spills into a queued dust
-withdrawal. The re-deposited excess covers any burn still pending against it, even after
+withdrawal. With `swept` at zero, nothing is reclaimed and the whole withdrawal goes back.
+The re-deposited excess covers any burn still pending against it, even after
 the controller invests again. What is left over-backs `swept` as dust, and a later
 `initiateDustWithdrawal` collects it once no burn lands during its delay.
 
@@ -121,8 +122,11 @@ The Gateway is Circle's. We depend on them for:
   same as one holding only real dust. With several burns pending, one that lands during
   the delay exposes the rest, but a third-party `depositFor` during the delay can offset
   its debit and hide them again, since `available` cannot tell a donation from the balance
-  the burn took. Either way the claim pays the pending burn's funds to the recipient, and
-  that burn leaves `swept` unbacked by its amount once it lands. A donor gains nothing:
+  the burn took. Nor does a landed burn expose the rest once the divests have taken `swept`
+  to zero, as `available` cannot fall below it. Either way the claim pays the pending
+  burn's funds to the recipient, and that burn leaves `swept` unbacked by its amount once
+  it lands. With `swept` at zero the Hub is unaffected, and the burn lands short instead,
+  against an empty balance. A donor gains nothing:
   hiding a landed burn costs at least its amount, for a shortfall that still needs another
   burn to be late. The recipient holds the admin role, so treasury can restore the balance
   with `depositFor`. Circle settles burns minutes after a mint, against a delay of days,
