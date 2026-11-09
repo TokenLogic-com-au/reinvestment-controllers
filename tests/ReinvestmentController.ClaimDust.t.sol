@@ -340,7 +340,7 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
   /// @dev After a full divest, the pending burn takes the whole queued dust withdrawal. Once the
   /// controller invests again, a principal withdrawal is not treated as dust, even with a
   /// donation keeping swept covered
-  function test_claimDust_revertsWith_NoDustWithdrawalInProcess_principalWithdrawalAfterEmptiedDust()
+  function test_claimDust_revertsWith_NoDustWithdrawalInProcess_reinvest()
     public
   {
     vm.prank(admin);
@@ -360,6 +360,25 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
     _invest(DIVESTED);
     _donate(DIVESTED);
     _pause();
+
+    vm.prank(admin);
+    controller.initiateWithdrawal();
+
+    vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    vm.expectRevert(IReinvestmentController.NoDustWithdrawalInProcess.selector);
+    vm.prank(admin);
+    controller.claimDust(alice);
+  }
+
+  /// @dev A debit the controller did not account for, such as a batch adjustment, can take the
+  /// whole queued dust withdrawal while paused and swept is above zero. A principal withdrawal
+  /// queued straight after is not treated as dust
+  function test_claimDust_revertsWith_NoDustWithdrawalInProcess_paused()
+    public
+  {
+    _burn(INVESTED + DUST, 0);
+    _donate(DUST);
 
     vm.prank(admin);
     controller.initiateWithdrawal();
