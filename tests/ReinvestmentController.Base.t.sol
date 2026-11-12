@@ -129,6 +129,30 @@ abstract contract ReinvestmentControllerTestBase is Test, GatewayPayloads {
     controller.unpause();
   }
 
+  /// @dev Divests with the burn deferred: the mint lands and {divest} lowers swept by
+  /// `amount + maxFee`, but the Gateway balance is untouched until {_burn}. The keeper is funded
+  /// with the fee, and the controller must be unpaused
+  function _divestWithDeferredBurn(uint256 amount) internal {
+    uint256 fee = controller.getMaxFee();
+
+    vm.mockCall(address(minter), abi.encodeWithSelector(minter.gatewayMint.selector), '');
+    usdc.mint(address(controller), amount);
+
+    usdc.mint(keeper, fee);
+    vm.startPrank(keeper);
+    usdc.approve(address(controller), fee);
+    controller.divest(amount, _encodeAttestation(_defaultTransferSpec(amount)), hex'1234');
+    vm.stopPrank();
+
+    vm.clearMockedCalls();
+  }
+
+  /// @dev Settles a burn against the controller's Gateway balance, as Circle does after a mint
+  function _burn(uint256 amount, uint256 fee) internal {
+    vm.prank(address(minter));
+    wallet.gatewayBurn(address(usdc), address(controller), amount, fee);
+  }
+
   function _setMaxFee(uint256 maxFee) internal {
     _pause();
     vm.prank(admin);
