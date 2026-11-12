@@ -162,6 +162,8 @@ contract ReinvestmentControllerWithdrawTest is ReinvestmentControllerTestBase {
 
     vm.expectEmit(address(controller));
     emit IReinvestmentController.WithdrawalCompleted(swept);
+    vm.expectEmit(address(controller));
+    emit IReinvestmentController.Redeposited(CONFIGURED_FEE - CHARGED_FEE);
 
     vm.prank(admin);
     controller.withdraw();
@@ -195,6 +197,9 @@ contract ReinvestmentControllerWithdrawTest is ReinvestmentControllerTestBase {
     controller.initiateDustWithdrawal();
 
     vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    vm.expectEmit(address(controller));
+    emit IReinvestmentController.Redeposited(DUST);
 
     vm.prank(admin);
     controller.withdraw();

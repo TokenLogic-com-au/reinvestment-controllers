@@ -109,6 +109,10 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// @param fee The fee pre-paid by the caller to keep the Hub's swept accounting exact
   event Divested(uint256 amount, uint256 fee);
 
+  /// @dev Emitted when the excess funds from the current operation are re-deposited into the Gateway
+  /// @param amount The amount of funds re-deposited
+  event Redeposited(uint256 amount);
+
   /// @dev Emitted when the minimum delay between invests is updated
   /// @param oldInvestMinDelay The old minimum delay
   /// @param investMinDelay The new minimum delay
@@ -135,8 +139,8 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   event SetLiquidBufferBps(uint256 oldLiquidBufferBps, uint256 liquidBufferBps);
 
   /// @dev Emitted when withdrawn funds are returned to the Hub, by {withdraw} or by {claimDust}
-  /// @param amount The amount of funds reclaimed by the Hub
-  event WithdrawalCompleted(uint256 amount);
+  /// @param reclaimedAmount The amount of funds reclaimed by the Hub
+  event WithdrawalCompleted(uint256 reclaimedAmount);
 
   /// @dev Emitted when an on-chain withdrawal is initiated
   /// @param amount The amount of funds withdrawn
@@ -217,8 +221,7 @@ interface IReinvestmentController is IERC1271, IAccessControl {
   /// zero the Hub is not called and the whole withdrawal is deposited back.
   /// {reclaim} is restricted to the Hub's configured controller, so repointing the Hub at a
   /// different controller while a withdrawal is pending makes this revert until it is pointed back.
-  /// The funds remain claimable in the Gateway, and the implementation sits behind a proxy, so a state this code cannot resolve can be addressed
-  /// by upgrading it
+  /// The funds remain claimable in the Gateway; a state this code cannot resolve can be addressed by upgrading it.
   function withdraw() external;
 
   /// @notice Initiates a claim on dust held on the Gateway

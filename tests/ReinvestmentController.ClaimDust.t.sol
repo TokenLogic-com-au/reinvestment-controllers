@@ -128,6 +128,8 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
 
     vm.expectEmit(address(controller));
     emit IReinvestmentController.WithdrawalCompleted(swept);
+    vm.expectEmit(address(controller));
+    emit IReinvestmentController.Redeposited(CONFIGURED_FEE - CHARGED_FEE);
 
     vm.prank(admin);
     controller.claimDust(alice);
@@ -180,6 +182,9 @@ contract ReinvestmentControllerClaimDustTest is ReinvestmentControllerTestBase {
 
     _burn(DIVESTED_MOST, CHARGED_FEE);
     vm.roll(block.number + WITHDRAWAL_DELAY);
+
+    vm.expectEmit(address(controller));
+    emit IReinvestmentController.Redeposited(DIVESTED / 2 + 2 * CONFIGURED_FEE - CHARGED_FEE);
 
     vm.prank(admin);
     controller.claimDust(alice);

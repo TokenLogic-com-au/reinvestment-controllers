@@ -551,6 +551,7 @@ contract ReinvestmentController is
     if (excess > 0) {
       USDC.forceApprove(address(GATEWAY_WALLET), excess);
       GATEWAY_WALLET.deposit(address(USDC), excess);
+      emit Redeposited(excess);
     }
   }
 }

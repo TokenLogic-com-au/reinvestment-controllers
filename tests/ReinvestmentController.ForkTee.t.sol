@@ -294,6 +294,9 @@ contract ReinvestmentControllerForkTeeTest is ReinvestmentControllerForkBase {
 
     _queueDustAgainstSpillingBurn();
 
+    vm.expectEmit(address(controller));
+    emit IReinvestmentController.Redeposited(MAX_FEE - CHARGED_FEE);
+
     vm.prank(admin);
     controller.claimDust(alice);
 
